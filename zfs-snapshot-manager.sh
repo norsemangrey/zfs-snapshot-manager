@@ -80,8 +80,8 @@ datasets_with_properties_without_snapshots_count=$(echo "$datasets_with_properti
 datasets_with_snapshots_without_properties_count=$(echo "$datasets_with_snapshots_without_properties" | sed '/^\s*$/d' | wc -l)
 
 # Store unique properties and their counts in arrays
-property_names=("Property")
-property_counts=("Datasets")
+property_names=("")
+property_counts=("")
 
 while IFS= read -r property; do
   property_count=$(echo "$datasets_with_snapshot_config" | grep -c "$property")
@@ -89,20 +89,14 @@ while IFS= read -r property; do
   property_counts+=("$property_count")
 done <<< "$dataset_snapshot_property_names"
 
-# Create a table with property names, counts, and index
-datasets_snapshot_property_table=()
-for ((i=0; i<${#property_names[@]}; i++)); do
-  if [[ $i -eq 0 ]]; then
-    index="#"
-  else
-    index=$((i))
-  fi
-  datasets_snapshot_property_table+=("$index ${property_names[i]} ${property_counts[i]}")
+datasets_snapshot_property_table=("ID Property Datasets")
+for ((i=1; i<${#property_names[@]}; i++)); do
+  datasets_snapshot_property_table+=("$i ${property_names[i]} ${property_counts[i]}")
 done
 
 # Store unique snapshot names and their counts in arrays
-snapshot_names=("Name")
-snapshot_counts=("Snapshots")
+snapshot_names=("")
+snapshot_counts=("")
 
 while IFS= read -r snapshot; do
   snapshot_count=$(echo "$dataset_snapshots" | grep -c "$snapshot")
@@ -110,20 +104,14 @@ while IFS= read -r snapshot; do
   snapshot_counts+=("$snapshot_count")
 done <<< "$dataset_snapshot_names"
 
-# Create a table with snapshot names, counts, and index
-dataset_snapshot_names_table=()
-for ((i=0; i<${#snapshot_names[@]}; i++)); do
-  if [[ $i -eq 0 ]]; then
-    index="#"
-  else
-    index=$((i))
-  fi
-  dataset_snapshot_names_table+=("$index ${snapshot_names[i]} ${snapshot_counts[i]}")
+dataset_snapshot_names_table=("ID Name Snapshots")
+for ((i=1; i<${#snapshot_names[@]}; i++)); do
+  dataset_snapshot_names_table+=("$i ${snapshot_names[i]} ${snapshot_counts[i]}")
 done
 
 # Store unique snapshot hold tags and their counts in arrays
-hold_names=("Tag")
-hold_counts=("Snapshots")
+hold_names=("")
+hold_counts=("")
 
 while IFS= read -r hold; do
   hold_count=$(echo "$dataset_snapshots_with_holds" | grep -c "$hold")
@@ -131,15 +119,10 @@ while IFS= read -r hold; do
   hold_counts+=("$hold_count")
 done <<< "$dataset_snapshot_hold_tags"
 
-# Create a table with snapshot names, counts, and index
-dataset_snapshot_holds_table=()
-for ((i=0; i<${#hold_names[@]}; i++)); do
-  if [[ $i -eq 0 ]]; then
-    index="#"
-  else
-    index=$((i))
-  fi
-  dataset_snapshot_holds_table+=("$index ${hold_names[i]} ${hold_counts[i]}")
+
+dataset_snapshot_holds_table=("ID Tag Snapshots")
+for ((i=1; i<${#hold_names[@]}; i++)); do
+  dataset_snapshot_holds_table+=("$i ${hold_names[i]} ${hold_counts[i]}")
 done
 
 
@@ -156,151 +139,6 @@ function display_summary() {
   show_menu
 
 } 
-
-function display_datasets() {
-
-  # Print the table using the 'column' command
-  echo "######  Properties  ######"
-  echo ""
-  printf '%s\n' "${datasets_snapshot_property_table[@]}" | column -t
-  echo ""
-
-  # Ask the user to select a property
-  read -p "List datasets by entering property index ('m' for menu or 'q' to quit): " selected_index
-  echo ""
-  echo "---------------------------------------------------------------------------------------------"
-  echo ""
-
-  # Check if the user wants to quit
-  if [[ "$selected_index" == "q" ]]; then
-    exit 0
-  fi
-
-    # Check if the user wants to return to menu
-  if [[ "$selected_index" == "m" ]]; then
-    show_menu
-    return
-  fi  
-
-  # Validate the user's input
-  if [[ ! "$selected_index" =~ ^[0-9]+$ || "$selected_index" -lt 1 || "$selected_index" -ge ${#property_names[@]} ]]; then
-    echo "Invalid selection. Please enter a valid index."
-    echo ""
-    display_datasets
-    return
-  fi
-
-  # Get the selected property
-  selected_property=${property_names[selected_index]}
-
-  # Display datasets with the selected property
-  #zfs get -H -o name,property,value $selected_property -s local -t filesystem } | column -t
-  datasets_with_snapshot_properties_table_print=("${datasets_with_snapshot_properties_table_headers}" "${datasets_with_snapshot_properties_table[@]}")
-  printf '%s\n' "${datasets_with_snapshot_properties_table_print[@]}" | grep "$selected_property\|$datasets_with_snapshot_properties_table_headers" | column -t
-  echo ""
-  echo "---------------------------------------------------------------------------------------------"
-  echo ""
-
-  display_datasets
-
-}
-
-function display_snapshots() {
-
-  # Print the table using the 'column' command
-  echo "######  Snapshots  ######"
-  echo ""
-  printf '%s\n' "${dataset_snapshot_names_table[@]}" | column -t
-  echo ""
-
-  # Ask the user to select a snapshot name
-  read -p "List snapshots by entering snapshot name index ('m' for menu or 'q' to quit): " selected_index
-  echo ""
-  echo "---------------------------------------------------------------------------------------------"
-  echo ""
-
-  # Check if the user wants to quit
-  if [[ "$selected_index" == "q" ]]; then
-    exit 0
-  fi
-
-    # Check if the user wants to return to menu
-  if [[ "$selected_index" == "m" ]]; then
-    show_menu
-    return
-  fi  
-
-  # Validate the user's input
-  if [[ ! "$selected_index" =~ ^[0-9]+$ || "$selected_index" -lt 1 || "$selected_index" -ge ${#snapshot_names[@]} ]]; then
-    echo "Invalid selection. Please enter a valid index."
-    echo ""
-    display_snapshots
-    return
-  fi
-
-  # Get the selected property
-  selected_snapshot=${snapshot_names[selected_index]}
-
-  # Display snapshot with the selected name
-  #zfs list -H -o name -t snapshot | grep $selected_snapshot  | column -t
-  dataset_snapshots_table_print=("${dataset_snapshots_table_headers}" "${dataset_snapshots_table[@]}")
-  printf '%s\n' "${dataset_snapshots_table_print[@]}" | grep "$selected_snapshot\|$dataset_snapshots_table_headers" | column -t
-  echo ""
-  echo "---------------------------------------------------------------------------------------------"
-  echo ""
-
-  display_snapshots
-
-}
-
-function display_holds() {
-
-  # Print the table using the 'column' command
-  echo "######  Holds  #######"
-  echo ""
-  printf '%s\n' "${dataset_snapshot_holds_table[@]}" | column -t
-  echo ""
-
-  # Ask the user to select a hold tag
-  read -p "List snapshots by entering hold name index ('m' for menu or 'q' to quit): " selected_index
-  echo ""
-  echo "---------------------------------------------------------------------------------------------"
-  echo ""
-
-  # Check if the user wants to quit
-  if [[ "$selected_index" == "q" ]]; then
-    exit 0
-  fi
-
-    # Check if the user wants to return to menu
-  if [[ "$selected_index" == "m" ]]; then
-    show_menu
-    return
-  fi  
-
-  # Validate the user's input
-  if [[ ! "$selected_index" =~ ^[0-9]+$ || "$selected_index" -lt 1 || "$selected_index" -ge ${#hold_names[@]} ]]; then
-    echo "Invalid selection. Please enter a valid index."
-    echo ""
-    display_holds
-    return
-  fi
-
-  # Get the selected hold tag
-  selected_holds=${hold_names[selected_index]}
-
-  # Display snapshots with the selected hold tag
-  #echo "$dataset_snapshots" | tr '\n' '\0' | xargs -0 zfs holds -H | grep $selected_holds  | column -t
-  dataset_snapshots_table_print=("${dataset_snapshots_table_headers}" "${dataset_snapshots_table[@]}")
-  printf '%s\n' "${dataset_snapshots_table_print[@]}" | grep "$selected_holds\|$dataset_snapshots_table_headers" | column -t
-  echo ""q
-
-  echo "---------------------------------------------------------------------------------------------"
-  echo ""
-
-  display_holds
-
-}
 
 function display_datasets_without_snapshots() {
   # Check if there are datasets without snapshots
@@ -334,6 +172,66 @@ function display_snapshots_without_properties() {
   show_menu
 }
 
+function display_table() {
+
+  local table_name="$1"
+  local -n table_content=$2
+
+  echo "######  $table_name  ######"
+  echo ""
+  printf '%s\n' "${table_content[@]}" | column -t
+  echo ""
+}
+
+function display_items() {
+
+  local item_type="$1"
+  local item_name="$2"
+  local item_index="$3"
+  local -n table_overview=$4
+  local -n table_main=$5
+  local -n table_headers=$6
+
+  local table_overview_local=("${table_overview[@]}")
+  local table_main_local=("${table_main[@]}")
+  local table_headers_local=("${table_headers[@]}")
+
+  display_table "$item_type" table_overview
+
+  read -p "List $item_name by entering $item_type index ('m' for menu or 'q' to quit): " selected_index
+  echo ""
+
+  # Check if the user wants to quit
+  if [[ "$selected_index" == "q" ]]; then
+    exit 0
+  fi
+
+  # Check if the user wants to return to the menu
+  if [[ "$selected_index" == "m" ]]; then
+    show_menu
+    return
+  fi
+
+  # Validate the user's input
+  if [[ ! "$selected_index" =~ ^[0-9]+$ || "$selected_index" -lt 1 || "$selected_index" -ge ${#table_overview[@]} ]]; then
+    echo "Invalid selection. Please enter a valid index."
+    echo ""
+    display_items "$item_type" "$item_name" "$item_index" table_overview_local table_main_local table_headers_local
+    return
+  fi
+
+  # Get the selected item
+  local selected_item=$(echo "${table_overview[selected_index]}" | awk '{print $2}')
+
+  local table_print=("${table_headers}" "${table_main[@]}")
+
+  printf '%s\n' "${table_print[@]}" | grep "$selected_item\|$table_headers" | column -t
+  echo ""
+
+  display_items "$item_type" "$item_name" "$item_index" table_overview_local table_main_local table_headers_local
+
+}
+
 function show_menu() {
 
   echo ""
@@ -358,9 +256,9 @@ function show_menu() {
 
   case "$choice" in
     1) display_summary ;;
-    2) display_datasets ;;
-    3) display_snapshots ;;
-    4) display_holds ;;
+    2) display_items "Properties" "datasets" 1 datasets_snapshot_property_table datasets_with_snapshot_properties_table datasets_with_snapshot_properties_table_headers;;
+    3) display_items "Snapshots" "snapshots" 1 dataset_snapshot_names_table dataset_snapshots_table dataset_snapshots_table_headers;;
+    4) display_items "Holds" "snapshots" 1 dataset_snapshot_holds_table dataset_snapshots_table dataset_snapshots_table_headers;;
     5) display_datasets_without_snapshots ;;
     6) display_snapshots_without_properties ;;
     q) exit 0 ;;
