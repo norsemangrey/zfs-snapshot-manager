@@ -1,8 +1,10 @@
 #!/bin/bash
 
 # Formatting constants.
-#BOLD="\e[1m"
-#CLEAR="\e[0m"
+BOLD="\e[1m"
+RED="\e[91m"
+GREEN="\e[92m"
+CLEAR="\e[0m"
 
 dry_run=false
 root_dataset=""
@@ -246,7 +248,7 @@ function display_summary() {
   printf '%s\n' "${summary_table[@]}" | column -t -s "|"
   echo ""
   
-  read -p "List items in each summary by entering the ('m' for menu or 'q' to quit): " selected_index
+  read -p "List items in each summary by entering the ID ('m' for menu or 'q' to quit): " selected_index
   echo ""
 
   # Check if the user wants to quit
@@ -506,7 +508,7 @@ function create_snapshots() {
     echo "         Creating ..."
 
     if [[ "$dry_run" == false ]]; then
-      #zfs snapshot $snapshot
+      zfs snapshot $snapshot
     fi
 
   done
@@ -516,8 +518,9 @@ function create_snapshots() {
   echo ""
 
   if [[ "$dry_run" == false ]]; then
-    # Re-start script to update with new data.
-    #${BASH_SOURCE:-$0} "$root_dataset"
+    
+    main
+
   fi
 
 }
@@ -586,7 +589,7 @@ function add_properties() {
     echo "         Adding ..."
 
     if [[ "$dry_run" == false ]]; then
-      #zfs set $property=true $dataset 
+      zfs set $property=true $dataset 
     fi
 
   done
@@ -596,8 +599,9 @@ function add_properties() {
   echo ""
 
   if [[ "$dry_run" == false ]]; then
-    # Re-start script to update with new data.
-    #${BASH_SOURCE:-$0} "$root_dataset" 
+    
+    main
+
   fi
 
 }
@@ -676,7 +680,7 @@ function remove_properties() {
     echo "        Removing ..."
 
     if [[ "$dry_run" == false ]]; then
-      #zfs inherit -r $property $dataset
+      zfs inherit -r $property $dataset
     fi
 
   done
@@ -686,8 +690,9 @@ function remove_properties() {
   echo ""
 
   if [[ "$dry_run" == false ]]; then
-    # Re-start script to update with new data.
-    #${BASH_SOURCE:-$0} "$root_dataset"
+    
+    main
+
   fi
 
 }
@@ -753,7 +758,7 @@ function remove_holds_delete_snapshots() {
 
           if [[ "$dry_run" == false ]]; then
             # Remove hold tags on the snapshot
-            #zfs release -r "$hold" "$snapshot"
+            zfs release -r "$hold" "$snapshot"
           fi
 
         done
@@ -770,7 +775,7 @@ function remove_holds_delete_snapshots() {
         echo "        Destroying ..."
 
         if [[ "$dry_run" == false ]]; then
-          #zfs destroy "$snapshot"
+          zfs destroy "$snapshot"
         fi
 
       fi
@@ -784,8 +789,9 @@ function remove_holds_delete_snapshots() {
   echo ""
 
   if [[ "$dry_run" == false ]]; then
-    # Re-start script to update with new data.
-    #${BASH_SOURCE:-$0} "$root_dataset"
+    
+    main
+
   fi
 
 }
@@ -849,7 +855,7 @@ function display_items() {
 
 function change_root_dataset() {
 
-  read -p "Enter the new root dataset name ('m' for menu or 'q' to quit): " new_root_dataset
+  read -p "Enter the new root dataset name or hit enter for all ('m' for menu or 'q' to quit): " new_root_dataset
   echo ""
 
   # Check if the user wants to quit
@@ -863,16 +869,17 @@ function change_root_dataset() {
     return
   fi
 
-  if zfs list -o name | grep -q "^$new_root_dataset$"; then
-
-   ${BASH_SOURCE:-$0} "$new_root_dataset"
-
-  else
+  if [ -n "$new_root_dataset" ] && ! zfs list -o name | grep -q "^$new_root_dataset$"; then
 
     echo "Dataset '$new_root_dataset' does not exist. Please enter a valid root dataset name."
     echo ""
     change_root_dataset
     return
+
+  else
+
+    root_dataset="$new_root_dataset"
+    main
 
   fi
 
@@ -880,9 +887,9 @@ function change_root_dataset() {
 
 function show_menu() {
 
-  echo ""
   echo "##########################################"
-  echo "###  ZFS SNAPSHOT MANAGER - MAIN MENU  ###"
+  echo "###        ZFS SNAPSHOT MANAGER        ###"
+  echo "###              MAIN MENU             ###"
   echo "##########################################"
   echo "#                                        #"
   echo "#  Select an option:                     #"
@@ -899,17 +906,18 @@ function show_menu() {
   echo ""
 
   if [[ -z "$root_dataset" ]]; then
-    echo "Root Dataset: All Pool Roots"
+    echo -e "Root Dataset: All Pool Roots"
   else
-    echo "Root Dataset: ${root_dataset}"
+    echo -e "Root Dataset: ${root_dataset}"
   fi
-
   echo ""
 
   if [[ "$dry_run" == true ]]; then
-    echo "Script is in test mode ... no ZFS commands will be executed."
-    echo ""
+    echo -e "${GREEN}Script is in test mode ... no ZFS commands will be executed.${CLEAR}"
+  else
+    echo -e "${RED}Script is NOT in test mode .. ZFS commands will be executed.${CLEAR}"
   fi
+  echo ""
 
   read -p "Enter your choice: " choice
   echo ""
@@ -927,5 +935,11 @@ function show_menu() {
   esac
 }
 
-gather_snapshot_data
-show_menu
+function main() {
+
+  gather_snapshot_data
+  show_menu
+
+}
+
+main
