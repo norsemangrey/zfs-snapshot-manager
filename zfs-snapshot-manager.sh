@@ -243,7 +243,7 @@ function display_summary() {
   summary_table+=("9 | Datasets wo/Snapshot Properties | $datasets_without_property_count")
 
 
-  echo "Summary:"
+  echo "###############  SUMMARY  #################"
   echo ""
   printf '%s\n' "${summary_table[@]}" | column -t -s "|"
   echo ""
@@ -508,7 +508,7 @@ function create_snapshots() {
     echo "         Creating ..."
 
     if [[ "$dry_run" == false ]]; then
-      zfs snapshot $snapshot
+      sudo zfs snapshot $snapshot
     fi
 
   done
@@ -589,7 +589,7 @@ function add_properties() {
     echo "         Adding ..."
 
     if [[ "$dry_run" == false ]]; then
-      zfs set $property=true $dataset 
+      sudo zfs set $property=true $dataset 
     fi
 
   done
@@ -680,7 +680,7 @@ function remove_properties() {
     echo "        Removing ..."
 
     if [[ "$dry_run" == false ]]; then
-      zfs inherit -r $property $dataset
+      sudo zfs inherit -r $property $dataset
     fi
 
   done
@@ -758,7 +758,7 @@ function remove_holds_delete_snapshots() {
 
           if [[ "$dry_run" == false ]]; then
             # Remove hold tags on the snapshot
-            zfs release -r "$hold" "$snapshot"
+            sudo zfs release -r "$hold" "$snapshot"
           fi
 
         done
@@ -775,7 +775,7 @@ function remove_holds_delete_snapshots() {
         echo "        Destroying ..."
 
         if [[ "$dry_run" == false ]]; then
-          zfs destroy "$snapshot"
+          sudo zfs destroy "$snapshot"
         fi
 
       fi
@@ -915,7 +915,8 @@ function show_menu() {
   if [[ "$dry_run" == true ]]; then
     echo -e "${GREEN}Script is in test mode ... no ZFS commands will be executed.${CLEAR}"
   else
-    echo -e "${RED}Script is NOT in test mode .. ZFS commands will be executed.${CLEAR}"
+    echo -e "${RED}Script is NOT in test mode .. ZFS commands will be executed."
+    echo -e "Note that sudo password might be required for operations like 'destroy', 'create', 'snapshot' and 'set'.${CLEAR}"
   fi
   echo ""
 
