@@ -1,195 +1,296 @@
 #!/bin/bash
 
 # Formatting constants.
-BOLD="\e[1m"
-CLEAR="\e[0m"
+#BOLD="\e[1m"
+#CLEAR="\e[0m"
 
-root_dataset=$1
+dry_run=false
+root_dataset=""
 
-# Create snapshots table with tab-separated values
-dataset_snapshots_table=()
-index=1
-while IFS=$'\t' read -r snapshot creation_date; do
+function usage() {
+  echo "Usage: $0 [-d] --root <root_dataset>"
+  echo "Options:"
+  echo "  -d, --dry-run   Perform a dry run (no zfs commands will be executed)"
+  echo "  -r, --root      Set the root dataset for ZFS snapshots data collection"
+  exit 1
+}
 
-  dataset_name=$(echo "$snapshot" | cut -d '@' -f 1)
-  snapshot_name=$(echo "$snapshot" | cut -d '@' -f 2)
-  dataset_properties=$(zfs get all "$snapshot" | awk '{print $2}' | grep ':' | sort | paste -s -d, -)
-  if [[ -z "$dataset_properties" ]]; then
-    dataset_properties="-"
+options=$(getopt -o dr: --long dry-run,root: -n 'zfs_snapshot_manager.sh' -- "$@")
+if [ $? -ne 0 ]; then
+  echo "Error: Invalid option"
+  usage
+fi
+
+eval set -- "$options"
+while true; do
+  case "$1" in
+    -d | --dry-run)
+      dry_run=true
+      shift ;;
+    -r | --root)
+      root_dataset="$2"
+      shift 2 ;;
+    --)
+      shift; break ;;
+    *)
+      echo "Internal error!"
+      exit 1 ;;
+  esac
+done
+
+# Validate the root dataset if provided
+if [ -n "$root_dataset" ]; then
+  if ! zfs list -H "$root_dataset" &>/dev/null; then
+    echo "Error: Root dataset '$root_dataset' does not exist."
+    exit 1
   fi
-  hold_tags=$(zfs holds -H "$snapshot" | awk '{print $2}' | sort | paste -s -d, -)
-  if [[ -z "$hold_tags" ]]; then
-    hold_tags="-"
-  fi
-
-  dataset_snapshots_table+=("$index $dataset_name $snapshot_name $dataset_properties $hold_tags $creation_date")
-  ((index++))
-
-done < <(zfs list -H -o name,creation -t snapshot -r $root_dataset | grep -v dataset)
-
-dataset_snapshots_table_headers=("ID Dataset Snapshot Properties Holds Created")
-
-# Get a list of all snapshot names (exclude selected)
-dataset_snapshots=$(zfs list -H -o name -t snapshot -r $root_dataset | grep -v datasets)
-
-# Get a snapshot count
-dataset_snapshot_count=$(echo "$dataset_snapshots" | wc -l)
-
-# Get unique snapshot names
-dataset_snapshot_names=$(echo "$dataset_snapshots" | awk -F'@' '{print $2}' | sort | uniq)
-
-# Extract snaspshot dataset names
-dataset_snapshot_dataset_names=$(echo "$dataset_snapshots" | awk -F'@' '{print $1}')
-
-# Get all snapshots with hold tags.
-dataset_snapshots_with_holds=$(echo "$dataset_snapshots" | tr '\n' '\0' | xargs -0 zfs holds -H | sort | sed '/^\s*$/d')
-
-# Get a count of snapshots with hold tags.
-dataset_snapshots_with_holds_count=$(echo "$dataset_snapshots_with_holds" | sed '/^\s*$/d' | wc -l)
-
-# Get unique hold tag names.
-dataset_snapshot_hold_tags=$(echo "$dataset_snapshots_with_holds" | awk '{print $2}' | uniq)
-
-# Get unique datasets that has snapshots
-datasets_with_snapshots=$(echo "$dataset_snapshot_dataset_names" | sort | uniq)
-
-# Get a count of the number of datasets with snapshots
-datasets_with_snapshots_count=$(echo "$datasets_with_snapshots" | wc -l)
-
-# Get snapshots that has a property set for automatic snapshot (TODO: Revice grep argument)
-datasets_with_snapshot_config=$(zfs get -o name,property,value -s local all -r $root_dataset | grep ":")
-
-# Extract the dataset names from the datasets
-datasets_with_snapshot_properties=$(echo "$datasets_with_snapshot_config" | awk '{print $1}' | sort | uniq)
-datasets_with_snapshot_properties_count=$(echo "$datasets_with_snapshot_properties" | wc -l)
-
-datasets_with_snapshot_properties_table=()
-index=1
-while IFS=$'\t' read -r dataset property value; do 
-  datasets_with_snapshot_properties_table+=("$index $dataset $property $value")
-  ((index++))
-done <<< "$datasets_with_snapshot_config"
-
-datasets_with_snapshot_properties_table_headers=("ID Dataset Property Value")
-
-# Extract the snapshot property names from the datasets
-dataset_snapshot_property_names=$(echo "$datasets_with_snapshot_config" | awk '{print $2}' | sort | uniq)
-
-# Compare dataset lists to find the differences
-datasets_with_properties_without_snapshots=$(comm -23 <(echo "$datasets_with_snapshot_properties") <(echo "$datasets_with_snapshots"))
-datasets_with_snapshots_without_properties=$(comm -13 <(echo "$datasets_with_snapshot_properties") <(echo "$datasets_with_snapshots"))
-datasets_with_properties_without_snapshots_count=$(echo "$datasets_with_properties_without_snapshots" | sed '/^\s*$/d' | wc -l)
-datasets_with_snapshots_without_properties_count=$(echo "$datasets_with_snapshots_without_properties" | sed '/^\s*$/d' | wc -l)
-
-# Store unique properties and their counts in tables
-if [[ "$datasets_with_snapshot_properties_count" -gt 0 ]]; then
-
-  property_names=("")
-  property_counts=("")
-
-  while IFS= read -r property; do
-    property_count=$(echo "$datasets_with_snapshot_config" | grep -c "$property")
-    property_names+=("$property")
-    property_counts+=("$property_count")
-  done <<< "$dataset_snapshot_property_names"
-
-  datasets_snapshot_property_table=("ID Property Datasets")
-  for ((i=1; i<${#property_names[@]}; i++)); do
-    datasets_snapshot_property_table+=("$i ${property_names[i]} ${property_counts[i]}")
-  done
-
 fi
 
-# Store unique snapshot names and their counts in table
-if [[ "$dataset_snapshot_count" -gt 0 ]]; then
+exclude_datasets="datasets\|external"
 
-  snapshot_names=("")
-  snapshot_counts=("")
+function gather_snapshot_data() {
 
-  while IFS= read -r snapshot; do
-    snapshot_count=$(echo "$dataset_snapshots" | grep -c "$snapshot")
-    snapshot_names+=("$snapshot")
-    snapshot_counts+=("$snapshot_count")
-  done <<< "$dataset_snapshot_names"
-
-  dataset_snapshot_names_table=("ID Name Snapshots")
-  for ((i=1; i<${#snapshot_names[@]}; i++)); do
-    dataset_snapshot_names_table+=("$i ${snapshot_names[i]} ${snapshot_counts[i]}")
-  done
-
-fi
-
- # Store unique snapshot hold tags and their counts in table
-if [[ "$dataset_snapshots_with_holds_count" -gt 0 ]]; then 
-
-  hold_names=("")
-  hold_counts=("")
-
-  while IFS= read -r hold; do
-    hold_count=$(echo "$dataset_snapshots_with_holds" | grep -c "$hold")
-    hold_names+=("$hold")
-    hold_counts+=("$hold_count")
-  done <<< "$dataset_snapshot_hold_tags"
-
-  dataset_snapshot_holds_table=("ID Tag Snapshots")
-  for ((i=1; i<${#hold_names[@]}; i++)); do
-    dataset_snapshot_holds_table+=("$i ${hold_names[i]} ${hold_counts[i]}")
-  done
-
-fi
-
-
-function display_summary() {
-
-  echo "Total snapshots: ${dataset_snapshot_count}"
-  echo "Datasets with snapshots: ${datasets_with_snapshots_count}"
-  echo "Datasets with snapshot properties: ${datasets_with_snapshot_properties_count}"
-  echo "Datasets with snapshot properties, but no snapshots: ${datasets_with_properties_without_snapshots_count}"
-  echo "Datasets with snapshots, but no snapshot properties: ${datasets_with_snapshots_without_properties_count}"
-  echo "Snapshots with holds: ${dataset_snapshots_with_holds_count}"
+  echo "Collecting data, please wait ..."
   echo ""
 
-  show_menu
+  # Create snapshot tables with tab-separated values
+  dataset_snapshots_table=()
+  dataset_snapshots_with_hold_table=()
+  index=1
+  while IFS=$'\t' read -r snapshot creation_date; do
+
+    dataset_name=$(echo "$snapshot" | cut -d '@' -f 1)
+    snapshot_name=$(echo "$snapshot" | cut -d '@' -f 2)
+
+    dataset_properties=$(zfs get all "$snapshot" | awk '{print $2}' | grep ':' | sort | paste -s -d, -)
+    
+    if [[ -z "$dataset_properties" ]]; then
+
+      dataset_properties="-"
+
+    fi
+
+    hold_tags=$(zfs holds -H "$snapshot" | awk '{print $2}' | sort | paste -s -d, -)
+
+    if [[ -z "$hold_tags" ]]; then
+
+      hold_tags="-"
+
+    else
+
+      dataset_snapshots_with_hold_table+=("$index $dataset_name $snapshot_name $dataset_properties $hold_tags $creation_date")
+
+    fi
+
+    dataset_snapshots_table+=("$index $dataset_name $snapshot_name $dataset_properties $hold_tags $creation_date")
+    ((index++))
+
+  done < <(zfs list -H -o name,creation -t snapshot -r $root_dataset | grep -ivw $exclude_datasets)
+  dataset_snapshots_count=${#dataset_snapshots_table[@]}
+  dataset_snapshots_with_hold_count=${#dataset_snapshots_with_hold_table[@]}
+  dataset_snapshots_table_headers=("ID Dataset Snapshot Properties Holds Created")
+
+  # Create dataset tables with tab-separated values
+  datasets_table=()
+  datasets_with_property_table=()
+  datasets_with_snapshot_table=()
+  datasets_without_snapshot_table=()
+  datasets_without_property_table=()
+  datasets_with_property_no_snapshot_table=()
+  datasets_with_snapshot_no_property_table=()
+  index=1
+  while IFS=$'\t' read -r dataset; do
+
+    properties=$(zfs get all "$dataset" | awk '{print $2}' | grep ':' | sort | paste -s -d, -)
+
+    snapshots=$(zfs list -t snapshot -H -o name "$dataset" | grep -c '@')
+
+    if [[ -z "$properties" ]]; then
+
+      properties="-"
+
+      datasets_without_property_table+=("$index $dataset $properties $snapshots")
+
+      if [[ $snapshots -lt 1 ]]; then
+
+        datasets_without_snapshot_table+=("$index $dataset $properties $snapshots")
+
+      else
+
+        datasets_with_snapshot_no_property_table+=("$index $dataset $properties $snapshots")
+
+        datasets_with_snapshot_table+=("$index $dataset $properties $snapshots")
+
+      fi
+
+    else
+
+      datasets_with_property_table+=("$index $dataset $properties $snapshots")
+
+      if [[ $snapshots -lt 1 ]]; then
+
+        datasets_without_snapshot_table+=("$index $dataset $properties $snapshots")
+
+        datasets_with_property_no_snapshot_table+=("$index $dataset $properties $snapshots")
+
+      else
+
+        datasets_with_snapshot_table+=("$index $dataset $properties $snapshots")
+
+      fi
+
+    fi
+
+    datasets_table+=("$index $dataset $properties $snapshots")
+
+    ((index++))
+
+  done < <(zfs list -H -o name -t filesystem -r $root_dataset | grep -ivw $exclude_datasets)
+  datasets_count=${#datasets_table[@]}  
+  datasets_with_property_count=${#datasets_with_property_table[@]}
+  datasets_with_snapshots_count=${#datasets_with_snapshot_table[@]}
+  datasets_without_snapshots_count=${#datasets_without_snapshot_table[@]}
+  datasets_without_property_count=${#datasets_without_property_table[@]}
+  datasets_with_property_no_snapshot_count=${#datasets_with_property_no_snapshot_table[@]}
+  datasets_with_snapshot_no_property_count=${#datasets_with_snapshot_no_property_table[@]}
+  datasets_table_headers=("ID Dataset Properties Snapshots")
+
+  #Get all datasets with snapshot properties and a list of unique property names
+  datasets_with_snapshot_properties=$(zfs get -o name,property,value -s local all -r $root_dataset | grep ":")
+  dataset_snapshot_property_names=$(echo "$datasets_with_snapshot_properties" | awk '{print $2}' | sort | uniq)
+
+  # Store unique properties and their counts in tables
+  if [[ "$datasets_with_property_count" -gt 0 ]]; then
+
+    property_names=("")
+    property_counts=("")
+
+    while IFS= read -r property; do
+      property_count=$(echo "$datasets_with_snapshot_properties" | grep -c "$property")
+      property_names+=("$property")
+      property_counts+=("$property_count")
+    done <<< "$dataset_snapshot_property_names"
+
+    datasets_snapshot_property_table=("ID Property Datasets")
+    for ((i=1; i<${#property_names[@]}; i++)); do
+      datasets_snapshot_property_table+=("$i ${property_names[i]} ${property_counts[i]}")
+    done
+
+  fi
+
+  # Get all snapshots (exclude selected) and  a list of unique snapshot names
+  dataset_snapshots=$(zfs list -H -o name -t snapshot -r $root_dataset | grep -ivw $exclude_datasets)
+  dataset_snapshot_names=$(echo "$dataset_snapshots" | awk -F'@' '{print $2}' | sort | uniq)
+
+  # Store unique snapshot names and their counts in table
+  if [[ "$dataset_snapshots_count" -gt 0 ]]; then
+
+    snapshot_names=("")
+    snapshot_counts=("")
+
+    while IFS= read -r snapshot; do
+      snapshot_count=$(echo "$dataset_snapshots" | grep -c "$snapshot")
+      snapshot_names+=("$snapshot")
+      snapshot_counts+=("$snapshot_count")
+    done <<< "$dataset_snapshot_names"
+
+    dataset_snapshot_names_table=("ID Name Snapshots")
+    for ((i=1; i<${#snapshot_names[@]}; i++)); do
+      dataset_snapshot_names_table+=("$i ${snapshot_names[i]} ${snapshot_counts[i]}")
+    done
+
+  fi
+
+  # Get all snapshots with hold tags and a list of unique tag names
+  dataset_snapshots_with_holds=$(echo "$dataset_snapshots" | tr '\n' '\0' | xargs -0 zfs holds -H | sort | sed '/^\s*$/d')
+  dataset_snapshot_hold_tags=$(echo "$dataset_snapshots_with_holds" | awk '{print $2}' | uniq)
+
+  # Store unique snapshot hold tags and their counts in table
+  if [[ "$dataset_snapshots_with_hold_count" -gt 0 ]]; then 
+
+    hold_names=("")
+    hold_counts=("")
+
+    while IFS= read -r hold; do
+      hold_count=$(echo "$dataset_snapshots_with_holds" | grep -c "$hold")
+      hold_names+=("$hold")
+      hold_counts+=("$hold_count")
+    done <<< "$dataset_snapshot_hold_tags"
+
+    dataset_snapshot_holds_table=("ID Tag Snapshots")
+    for ((i=1; i<${#hold_names[@]}; i++)); do
+      dataset_snapshot_holds_table+=("$i ${hold_names[i]} ${hold_counts[i]}")
+    done
+
+  fi
 
 } 
 
-function display_datasets_without_snapshots() {
+function display_summary() {
 
-  # Check if there are datasets without snapshots
-  if [[ "$datasets_with_properties_without_snapshots_count" -eq 0 ]]; then
-    echo "No datasets without snapshots."
-    echo ""
-  else
-    # Print the list of datasets without snapshots
-    echo "Datasets without snapshots:"
-    echo ""
-    printf '%s\n' "${datasets_with_properties_without_snapshots[@]}"
-    echo ""
+  local summary_table=()
+  summary_table+=("ID | Description | Count")
+  summary_table+=("1 | Snapshots Total | $dataset_snapshots_count")
+  summary_table+=("2 | Snapshots w/Holds | $dataset_snapshots_with_hold_count")
+  summary_table+=("3 | Datasets Total | $datasets_count")
+  summary_table+=("4 | Datasets w/Snapshots | $datasets_with_snapshots_count")
+  summary_table+=("5 | Datasets w/Snapshots, wo/Snapshot Properties | $datasets_with_snapshot_no_property_count")
+  summary_table+=("6 | Datasets wo/Snapshots | $datasets_without_snapshots_count")
+  summary_table+=("7 | Datasets w/Snapshot Properties | $datasets_with_property_count")
+  summary_table+=("8 | Datasets w/Snapshot Properties, wo/Snapshots | $datasets_with_property_no_snapshot_count")
+  summary_table+=("9 | Datasets wo/Snapshot Properties | $datasets_without_property_count")
+
+
+  echo "Summary:"
+  echo ""
+  printf '%s\n' "${summary_table[@]}" | column -t -s "|"
+  echo ""
+  
+  read -p "List items in each summary by entering the ('m' for menu or 'q' to quit): " selected_index
+  echo ""
+
+  # Check if the user wants to quit
+  if [[ "$selected_index" == "q" ]]; then
+    exit 0
   fi
 
-  show_menu
-
-}
-
-function display_snapshots_without_properties() {
-
-  # Check if there are snapshots without properties
-  if [[ "$datasets_with_snapshots_without_properties_count" -eq 0 ]]; then
-    echo "No snapshots without properties."
-    echo ""
-  else
-    # Print the list of snapshots without properties
-    echo "Snapshots without properties:"
-    echo ""
-    printf '%s\n' "${datasets_with_snapshots_without_properties[@]}"
-    echo ""
+  # Check if the user wants to return to the menu
+  if [[ "$selected_index" == "m" ]]; then
+    show_menu
+    return
   fi
 
-  show_menu
+  # Validate the user's input
+  if [[ ! "$selected_index" =~ ^[0-9]+$ || "$selected_index" -lt 1 || "$selected_index" -gt 9 ]]; then
+    echo "Invalid selection. Please enter a valid index."
+    echo ""
+    display_summary
+    return
+  fi
 
-}
+  case "$selected_index" in
+    1) display_list_table "" "snapshots" ${dataset_snapshots_count} dataset_snapshots_table_headers dataset_snapshots_table ;;
+    2) display_list_table "" "snapshots" ${dataset_snapshots_with_hold_count} dataset_snapshots_table_headers dataset_snapshots_with_hold_table ;;
+    3) display_list_table "" "datasets" ${datasets_count} datasets_table_headers datasets_table ;;
+    4) display_list_table "" "datasets" ${datasets_with_snapshots_count} datasets_table_headers datasets_with_snapshot_table ;;
+    5) display_list_table "" "datasets" ${datasets_with_snapshot_no_property_count} datasets_table_headers datasets_with_snapshot_no_property_table ;;    
+    6) display_list_table "" "datasets" ${datasets_without_snapshots_count} datasets_table_headers datasets_without_snapshot_table ;;    
+    7) display_list_table "" "datasets" ${datasets_with_property_count} datasets_table_headers datasets_with_property_table ;;
+    8) display_list_table "" "datasets" ${datasets_with_property_no_snapshot_count} datasets_table_headers datasets_with_property_no_snapshot_table ;;
+    9) display_list_table "" "datasets" ${datasets_without_property_count} datasets_table_headers datasets_without_property_table ;;
+    m) show_menu 
+       return ;;
+    q) exit 0 ;;
+    *) echo "Invalid selection. Please enter a valid index."
+       echo ""
+       display_summary ;;
+  esac
 
-function display_table() {
+  display_summary
+
+} 
+
+function display_unique_table() {
 
   local table_name="$1"
   local -n table_content=$2
@@ -198,6 +299,494 @@ function display_table() {
   echo ""
   printf '%s\n' "${table_content[@]}" | column -t
   echo ""
+
+}
+
+function display_list_table() {
+
+  local filter="$1"
+  local type="$2"
+  local count="$3"
+  local -n headers=$4
+  local -n table=$5
+
+  if [[ "$count" -eq 0 ]]; then
+
+    echo "No items to display."
+    echo ""
+
+  else
+
+    local filtered_table=()
+    for item in "${table[@]}"; do
+      if echo "$item" | grep -q "$filter"; then
+        filtered_table+=("$item")
+      fi
+    done
+
+    local print=("${headers}" "${filtered_table[@]}")
+
+    echo "Items: $count"
+
+    echo "---------------------------------------------------------------------------------------------------------------------------"
+    echo ""
+    printf '%s\n' "${print[@]}" | column -t
+    echo ""
+    echo "---------------------------------------------------------------------------------------------------------------------------"
+    echo ""
+
+    # Prompt user for options
+    read -r -p "Do you want to apply actions to (A)ll snapshots or (S)elected snapshots or go (B)ack?: " choice
+    echo ""
+
+    if [[ "$choice" =~ ^[Aa]$ ]]; then
+
+      # Apply actions to all items
+      selected=("${filtered_table[@]}")
+
+    elif [[ "$choice" =~ ^[Ss]$ ]]; then
+
+      # Apply actions to selected items
+      while true; do
+
+        read -r -p "Enter the ID of the items to select (comma-separated): " selected_ids
+        echo ""
+
+        if [[ ! "$selected_ids" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+
+          echo "Invalid input. Please enter a list of comma-separated numbers."
+          echo ""
+
+        else
+
+          IFS="," read -r -a selected_ids_arr <<< "$selected_ids"
+
+          local valid_input=true
+
+          selected=()
+          for id in "${selected_ids_arr[@]}"; do
+
+            local found=false
+
+            for item in "${filtered_table[@]}"; do
+
+              if [[ "$item" == "$id "* ]]; then
+                selected+=("$item")
+                found=true
+                break
+              fi
+
+            done
+
+            if [[ "$found" == false ]]; then
+              valid_input=false
+              break
+            fi
+
+          done
+
+          if [[ "$valid_input" == true ]]; then
+            break
+          else
+            echo "Invalid ID(s) provided. Please enter valid ID(s) from the list."
+            echo ""
+          fi
+
+        fi
+
+      done
+
+    elif [[ "$choice" =~ ^[Bb]$ ]]; then
+
+      return
+
+    else
+
+      echo "Invalid selection."
+      echo ""
+      return
+
+    fi
+
+    # Display the selected items
+    if [[ ${#selected[@]} -eq 0 ]]; then
+      echo "No items selected."
+      echo ""
+    else
+      echo "Selected Items:"
+      echo "---------------------------------------------------------------------------------------------------------------------------"
+      echo ""
+      printf '%s\n' "${headers}" "${selected[@]}" | column -t
+      echo ""
+      echo "---------------------------------------------------------------------------------------------------------------------------"
+      echo ""
+    fi
+
+    if [[ "$type" == "snapshots" ]]; then
+
+      # Prompt user for action
+      read -r -p "Do you want to release holds and (D)estroy snapshots, release snapshot (H)olds only, or go (B)ack?: " response
+      echo ""
+
+      if [[ "$response" =~ ^[Dd]$ ]]; then
+
+        remove_holds_delete_snapshots selected "$type" true
+
+      elif [[ "$response" =~ ^[Hh]$ ]]; then
+
+        remove_holds_delete_snapshots selected "$type" false
+
+      else
+
+        echo "Action canceled. No snapshots were modified."
+        echo ""
+
+      fi
+
+    fi
+
+    if [[ "$type" == "datasets" ]]; then 
+
+      # Prompt user for action
+      read -r -p "Do you want to (A)dd or (R)emove a snapshot property, (C)reate snapshots, (D)estroy snapshots release (H)olds or go (B)ack?: " response
+      echo ""
+
+      if [[ "$response" =~ ^[Dd]$ ]]; then
+
+        remove_holds_delete_snapshots selected "$type" true
+
+      elif [[ "$response" =~ ^[Hh]$ ]]; then
+
+        remove_holds_delete_snapshots selected "$type" false
+
+      elif [[ "$response" =~ ^[Cc]$ ]]; then
+
+        create_snapshots selected
+
+      elif [[ "$response" =~ ^[Aa]$ ]]; then
+
+        add_properties selected
+
+      elif [[ "$response" =~ ^[Rr]$ ]]; then
+
+        remove_properties selected
+
+      else
+
+        echo "Action canceled. No datasets were modified."
+        echo ""
+
+      fi
+
+    fi
+
+  fi
+
+} 
+
+function create_snapshots() {
+
+  local -n items=$1
+
+  local timestamp=$(date +%Y-%m-%dT%H:%M:%S)
+
+  echo "Creating Snapshots"
+  echo "---------------------------------------------------------------------"
+
+  for item in "${items[@]}"; do
+
+    dataset=$(echo "$item" | awk '{print $2}')
+    echo ""
+    echo "$dataset"
+
+    snapshot=$(echo "$dataset@manual-$timestamp")  
+
+    echo "   |"
+    echo "   '--> [$snapshot]"
+    echo "         Creating ..."
+
+    if [[ "$dry_run" == false ]]; then
+      #zfs snapshot $snapshot
+    fi
+
+  done
+
+  echo ""
+  echo "---------------------------------------------------------------------"
+  echo ""
+
+  if [[ "$dry_run" == false ]]; then
+    # Re-start script to update with new data.
+    #${BASH_SOURCE:-$0} "$root_dataset"
+  fi
+
+}
+
+function add_properties() {
+
+  local -n items=$1
+
+  local -r valid_input_pattern="^[0-9a-z_-]+$"
+
+  while true; do
+
+    read -r -p "Provide first part ('c' to cancel): " first
+    echo ""
+
+    # Check if the user wants to cancel
+    if [[ "$first" == "c" ]]; then
+      echo "Operation canceled. No properties were added."
+      echo ""
+      return
+    fi
+
+    if [[ ! "$first" =~ $valid_input_pattern ]]; then
+      echo "Invalid input. Please only use numbers, lowercase characters, '-' and '_' in the first part."
+      echo ""
+    else
+      break
+    fi
+
+  done
+
+  while true; do
+
+    read -r -p "Provide second part ('c' to cancel): " second
+    echo ""
+
+    # Check if the user wants to cancel
+    if [[ "$second" == "c" ]]; then
+      echo "Operation canceled. No properties were added."
+      echo ""
+      return
+    fi
+
+    if [[ ! "$second" =~ $valid_input_pattern ]]; then
+      echo "Invalid input. Please only use numbers, lowercase characters, '-' and '_' in the second part."
+      echo ""
+    else
+      break
+    fi
+
+  done
+
+  local property=$(echo "$first:$second") 
+
+  echo "Adding Propery"
+  echo "---------------------------------------------------------------------"
+
+  for item in "${items[@]}"; do
+
+    dataset=$(echo "$item" | awk '{print $2}')
+
+    echo ""
+    echo "$dataset" 
+    echo "   |"
+    echo "   '--> [$property]"
+    echo "         Adding ..."
+
+    if [[ "$dry_run" == false ]]; then
+      #zfs set $property=true $dataset 
+    fi
+
+  done
+
+  echo ""
+  echo "---------------------------------------------------------------------"
+  echo ""
+
+  if [[ "$dry_run" == false ]]; then
+    # Re-start script to update with new data.
+    #${BASH_SOURCE:-$0} "$root_dataset" 
+  fi
+
+}
+
+function remove_properties() {
+
+  local -n items=$1
+
+  local properties=()
+  local index=1
+
+  # Get unique properties for selected datasets
+  for item in "${items[@]}"; do
+
+    properties_string=$(echo "$item" | awk '{print $3}')
+    IFS=',' read -ra dataset_properties <<< "$properties_string"
+
+    for property in "${dataset_properties[@]}"; do
+      # Check if the property is not already in the properties array
+      if [[ "$property" != "-" && ! " ${properties[*]} " =~ " $property " ]]; then
+        properties+=("$index $property")
+        ((index++))
+      fi
+    done
+
+  done
+
+  if [ "${#properties[@]}" -lt 1 ]; then
+    echo "No properties found. Operation canceled."
+    echo ""
+    return
+  fi
+
+  for prop in "${properties[@]}"; do
+    echo "$prop"
+  done
+  echo ""
+
+  local selected_id=""
+  while [[ ! "$selected_id" =~ ^[0-9]+$ || "$selected_id" -lt 1 || "$selected_id" -ge "$index" ]]; do
+
+    read -p "Enter the ID of the property to remove (or 'c' to cancel): " selected_id
+    echo ""
+
+    if [[ "$selected_id" == "c" ]]; then
+      echo "Operation canceled."
+      echo ""
+      return
+    fi
+
+    if [[ ! "$selected_id" =~ ^[0-9]+$ || "$selected_id" -lt 1 || "$selected_id" -ge "$index" ]]; then
+      echo "Invalid input. Please enter a valid ID or 'c' to cancel."
+      echo ""
+    fi
+
+  done
+
+  local property=""
+  for prop in "${properties[@]}"; do
+    if [[ "$prop" == "$selected_id "* ]]; then
+      property=$(echo "$prop" | awk '{print $2}')
+      break
+    fi
+  done
+
+  echo "Removing Propery"
+  echo "---------------------------------------------------------------------"
+
+  for item in "${items[@]}"; do
+
+    dataset=$(echo "$item" | awk '{print $2}')
+    echo ""
+    echo "$dataset" 
+    echo "  |"
+    echo "  '--> [$property]"
+    echo "        Removing ..."
+
+    if [[ "$dry_run" == false ]]; then
+      #zfs inherit -r $property $dataset
+    fi
+
+  done
+
+  echo ""
+  echo "---------------------------------------------------------------------"
+  echo ""
+
+  if [[ "$dry_run" == false ]]; then
+    # Re-start script to update with new data.
+    #${BASH_SOURCE:-$0} "$root_dataset"
+  fi
+
+}
+
+function remove_holds_delete_snapshots() {
+
+  local -n items=$1
+  local type="$2"
+  local delete="$3"
+
+  local heading="Releasing Holds"
+
+  if [[ "$delete" == true ]]; then
+    heading="Removing Snapshots"
+  fi
+
+  echo "$heading"
+  echo "---------------------------------------------------------------------"
+
+  # User chose to delete snapshots and release holds
+  for item in "${items[@]}"; do
+
+    dataset=$(echo "$item" | awk '{print $2}')
+    echo ""
+    echo "$dataset"
+
+    if [[ "$type" == "snapshots" ]] ; then
+
+      snapshots=$(echo "$item" | awk '{print $2 "@" $3}')
+
+    else
+
+      snapshots=$(zfs list -t snapshot -H -o name "$dataset")
+
+      if [[ -z "$snapshots" ]]; then
+
+        echo "  |"
+        echo "  '--> No snapshots found..."
+        
+        continue
+
+      fi
+
+    fi
+    
+
+    while IFS= read -r snapshot; do
+
+      echo "  |"
+      echo "  '--> [$snapshot]"
+
+      # Check if the snapshot has any hold tags
+      holds=($(zfs holds -H "$snapshot" | awk '{ print $2 }'))
+
+      if [ ${#holds[@]} -ne 0 ]; then
+
+        for hold in "${holds[@]}"; do
+
+          echo "          |"
+          echo "          '--> [$hold]"
+
+          echo "                Releasing ..."
+
+          if [[ "$dry_run" == false ]]; then
+            # Remove hold tags on the snapshot
+            #zfs release -r "$hold" "$snapshot"
+          fi
+
+        done
+
+      else
+
+          echo "          |"
+          echo "          '--> No holds found."      
+
+      fi
+
+      if [[ "$delete" == true ]]; then
+
+        echo "        Destroying ..."
+
+        if [[ "$dry_run" == false ]]; then
+          #zfs destroy "$snapshot"
+        fi
+
+      fi
+
+    done <<< "$snapshots"
+
+  done
+
+  echo ""
+  echo "---------------------------------------------------------------------"
+  echo ""
+
+  if [[ "$dry_run" == false ]]; then
+    # Re-start script to update with new data.
+    #${BASH_SOURCE:-$0} "$root_dataset"
+  fi
 
 }
 
@@ -222,7 +811,7 @@ function display_items() {
     local table_main_local=("${table_main[@]}")
     local table_headers_local=("${table_headers[@]}")
 
-    display_table "$item_type" table_overview
+    display_unique_table "$item_type" table_overview
 
     read -p "List $item_name by entering an ID ('m' for menu or 'q' to quit): " selected_index
     echo ""
@@ -248,15 +837,10 @@ function display_items() {
 
     # Get the selected item
     local selected_item=$(echo "${table_overview[selected_index]}" | awk '{print $2}')
+    local count=$(echo "${table_overview[selected_index]}" | awk '{print $3}')
 
-    local table_print=("${table_headers}" "${table_main[@]}")
+    display_list_table "$selected_item" "$item_name" "$count" table_headers table_main 
 
-    echo "---------------------------------------------------------------------------------------------------------------------------"
-    echo ""
-    printf '%s\n' "${table_print[@]}" | grep "$selected_item\|$table_headers" | column -t
-    echo ""
-    echo "---------------------------------------------------------------------------------------------------------------------------"
-    echo ""
     display_items "$item_type" "$item_name" "$item_count" table_overview_local table_main_local table_headers_local
 
   fi
@@ -294,38 +878,47 @@ function change_root_dataset() {
 
 }
 
-
 function show_menu() {
 
   echo ""
-  echo "#######  ZFS MANAGER - MAIN MENU  ########"
+  echo "##########################################"
+  echo "###  ZFS SNAPSHOT MANAGER - MAIN MENU  ###"
+  echo "##########################################"
   echo "#                                        #"
   echo "#  Select an option:                     #"
   echo "#                                        #"
-  echo "#  1. Show summary                       #"
-  echo "#  2. List datasets by properties        #"
-  echo "#  3. List snapshots by name             #"
-  echo "#  4. List snapshots by hold             #"
-  echo "#  5. List datasets without snapshots    #"
-  echo "#  6. List snapshots without properties  #"
+  echo "#  1. Show Summary / Totals              #"
+  echo "#  2. List Datasets by Property          #"
+  echo "#  3. List Snapshots by Name             #"
+  echo "#  4. List Snapshots by Hold             #"
   echo "#                                        #"
   echo "#  c. Change Root                        #" 
   echo "#  q. Quit                               #"
   echo "#                                        #"
   echo "##########################################"
   echo ""
-  echo "Root Dataset: ${root_dataset}"
+
+  if [[ -z "$root_dataset" ]]; then
+    echo "Root Dataset: All Pool Roots"
+  else
+    echo "Root Dataset: ${root_dataset}"
+  fi
+
   echo ""
+
+  if [[ "$dry_run" == true ]]; then
+    echo "Script is in test mode ... no ZFS commands will be executed."
+    echo ""
+  fi
+
   read -p "Enter your choice: " choice
   echo ""
 
   case "$choice" in
     1) display_summary ;;
-    2) display_items "Properties" "datasets" "${datasets_with_snapshot_properties_count}" datasets_snapshot_property_table datasets_with_snapshot_properties_table datasets_with_snapshot_properties_table_headers;;
+    2) display_items "Properties" "datasets" "${datasets_with_property_count}" datasets_snapshot_property_table datasets_with_property_table datasets_table_headers;;
     3) display_items "Snapshots" "snapshots" "${datasets_with_snapshots_count}" dataset_snapshot_names_table dataset_snapshots_table dataset_snapshots_table_headers;;
-    4) display_items "Holds" "snapshots" "${dataset_snapshots_with_holds_count}" dataset_snapshot_holds_table dataset_snapshots_table dataset_snapshots_table_headers;;
-    5) display_datasets_without_snapshots ;;
-    6) display_snapshots_without_properties ;;
+    4) display_items "Holds" "snapshots" "${dataset_snapshots_with_hold_count}" dataset_snapshot_holds_table dataset_snapshots_table dataset_snapshots_table_headers;;
     c) change_root_dataset ;;
     q) exit 0 ;;
     *) echo "Invalid option. Please try again."
@@ -334,4 +927,5 @@ function show_menu() {
   esac
 }
 
+gather_snapshot_data
 show_menu
