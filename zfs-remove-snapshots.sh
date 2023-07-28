@@ -93,6 +93,7 @@ else
     exit 0
   fi
 
+
   # Prompt user for action
   read -r -p "Do you want to (D)elete snapshots and release holds, (R)elease holds only, or (C)ancel? (D/R/C): " response
 
