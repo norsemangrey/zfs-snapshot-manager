@@ -575,6 +575,32 @@ function add_properties() {
 
   local property=$(echo "$first:$second") 
 
+  while true; do
+
+    read -r -p "Provide property value ('c' to cancel, default=true): " value
+    echo ""
+
+    # Check if the user wants to cancel
+    if [[ "$value" == "c" ]]; then
+      echo "Operation canceled. No properties were added."
+      echo ""
+      return
+    fi
+
+    if [[ -z "$value" ]]; then
+      value="true"
+      break
+    fi
+
+    if [[ ! "$value" =~ "^[a-z]+$" ]]; then
+      echo "Invalid input. Please only use lowercase characters for the value."
+      echo ""
+    else
+      break
+    fi
+
+  done
+
   echo "Adding Propery"
   echo "---------------------------------------------------------------------"
 
@@ -585,11 +611,11 @@ function add_properties() {
     echo ""
     echo "$dataset" 
     echo "   |"
-    echo "   '--> [$property]"
+    echo "   '--> [$property=$value]"
     echo "         Adding ..."
 
     if [[ "$dry_run" == false ]]; then
-      sudo zfs set $property=true $dataset 
+      sudo zfs set $property=$value $dataset 
     fi
 
   done
