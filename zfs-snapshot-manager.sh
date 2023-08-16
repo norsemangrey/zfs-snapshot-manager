@@ -9,6 +9,8 @@ CLEAR="\e[0m"
 dry_run=false
 root_dataset=""
 
+exclude_datasets="datasets\|external"
+
 function usage() {
   echo "Usage: $0 [-d] --root <root_dataset>"
   echo "Options:"
@@ -48,8 +50,6 @@ if [ -n "$root_dataset" ]; then
   fi
 fi
 
-exclude_datasets="datasets\|external"
-
 function gather_snapshot_data() {
 
   echo "Collecting data, please wait ..."
@@ -64,7 +64,8 @@ function gather_snapshot_data() {
     dataset_name=$(echo "$snapshot" | cut -d '@' -f 1)
     snapshot_name=$(echo "$snapshot" | cut -d '@' -f 2)
 
-    dataset_properties=$(zfs get all "$snapshot" | awk '{print $2}' | grep ':' | sort | paste -s -d, -)
+    # Find datasets that has a custom property (:) set to 'true'.
+    dataset_properties=$(zfs get all -H -o property,value "$snapshot" | grep -E ':.*true' | awk '{print $1}' | sort | paste -s -d, -)
     
     if [[ -z "$dataset_properties" ]]; then
 
@@ -103,7 +104,8 @@ function gather_snapshot_data() {
   index=1
   while IFS=$'\t' read -r dataset; do
 
-    properties=$(zfs get all "$dataset" | awk '{print $2}' | grep ':' | sort | paste -s -d, -)
+    # Find datasets that has a custom property (:) set to 'true'.
+    properties=$(zfs get all -H -o property,value "$dataset" | grep -E ':.*true' | awk '{print $1}' | sort | paste -s -d, -)
 
     snapshots=$(zfs list -t snapshot -H -o name "$dataset" | grep -c '@')
 
@@ -157,8 +159,8 @@ function gather_snapshot_data() {
   datasets_with_snapshot_no_property_count=${#datasets_with_snapshot_no_property_table[@]}
   datasets_table_headers=("ID Dataset Properties Snapshots")
 
-  #Get all datasets with snapshot properties and a list of unique property names
-  datasets_with_snapshot_properties=$(zfs get -o name,property,value -s local all -r $root_dataset | grep ":")
+  # Get all datasets with snapshot properties and a list of unique property names
+  datasets_with_snapshot_properties=$(zfs get -o name,property,value -s local all -r $root_dataset | grep ':')
   dataset_snapshot_property_names=$(echo "$datasets_with_snapshot_properties" | awk '{print $2}' | sort | uniq)
 
   # Store unique properties and their counts in tables
@@ -168,7 +170,7 @@ function gather_snapshot_data() {
     property_counts=("")
 
     while IFS= read -r property; do
-      property_count=$(echo "$datasets_with_snapshot_properties" | grep -c "$property")
+      property_count=$(echo "$datasets_with_snapshot_properties" | grep 'true' | grep -c "$property" )
       property_names+=("$property")
       property_counts+=("$property_count")
     done <<< "$dataset_snapshot_property_names"
@@ -473,6 +475,10 @@ function display_list_table() {
 
         remove_properties selected
 
+      elif [[ "$response" =~ ^[Pp]$ ]]; then
+
+        set_snapshot_permissions selected
+
       else
 
         echo "Action canceled. No datasets were modified."
@@ -646,11 +652,13 @@ function remove_properties() {
     IFS=',' read -ra dataset_properties <<< "$properties_string"
 
     for property in "${dataset_properties[@]}"; do
+
       # Check if the property is not already in the properties array
       if [[ "$property" != "-" && ! " ${properties[*]} " =~ " $property " ]]; then
         properties+=("$index $property")
         ((index++))
       fi
+      
     done
 
   done
@@ -693,7 +701,7 @@ function remove_properties() {
     fi
   done
 
-  echo "Removing Propery"
+  echo "Clear Propery"
   echo "---------------------------------------------------------------------"
 
   for item in "${items[@]}"; do
@@ -703,14 +711,14 @@ function remove_properties() {
     echo "$dataset" 
     echo "  |"
     echo "  '--> [$property]"
-    echo "        Removing ..."
+    echo "        Clearing (setting 'false')..."
 
     if [[ "$dry_run" == false ]]; then
-      sudo zfs inherit -r $property $dataset
+      sudo zfs set $property=false $dataset
     fi
 
   done
-
+ 
   echo ""
   echo "---------------------------------------------------------------------"
   echo ""
@@ -722,6 +730,101 @@ function remove_properties() {
   fi
 
 }
+
+function set_snapshot_permissions() {
+
+  local -n items=$1
+
+  local permissions_snapshot_and_send="compression,hold,release,send,snapshot"
+  local permissions_snapshot_edge="mount,destroy"
+
+  echo "Setting Snapshot Permissions"
+  echo "---------------------------------------------------------------------"
+
+  for item in "${items[@]}"; do
+
+    dataset=$(echo "$item" | awk '{print $2}')
+    properties_string=$(echo "$item" | awk '{print $3}')
+
+    echo ""
+    echo "$dataset" 
+
+    IFS=',' read -ra dataset_properties <<< "$properties_string"
+
+    snapshot_enabled=false
+    for property in "${dataset_properties[@]}"; do
+
+      # Check if the property is not already in the properties array
+      if [[ $property == "snapshot"* ]]; then
+
+        property_value=$(zfs get -H -o value "$property" "$dataset")
+
+        if [[ $property_value == "true" ]]; then
+
+          snapshot_enabled=true
+
+        fi
+
+      fi
+
+    done
+
+    dataset_is_edge=false
+    if [[ $properties_string == *"type:edge"* ]]; then
+
+      # Check if dataset has any children (if so we do not want to set destroy permissions)
+      used_by_children=$(zfs get -H -o value -p usedbychildren $dataset)
+
+      if [[ $used_by_children == 0 ]]; then
+
+        dataset_is_edge=true
+
+      fi
+
+    fi
+
+    if [[ $snapshot_enabled == true ]]; then
+
+      echo "  Snapshotting Enabled -> Allowing on Dataset + Descendents ($permissions_snapshot_and_send)..."
+
+      if [[ "$dry_run" == false ]]; then
+        sudo zfs allow -u manager $permissions_snapshot_and_send $dataset
+      fi
+
+      if [[ $dataset_is_edge == true ]]; then
+
+        echo "  Is Edge Dataset -> Allowing on Descendents ($permissions_snapshot_edge)..."
+
+        if [[ "$dry_run" == false ]]; then
+          sudo zfs allow -d -u manager $permissions_snapshot_edge $dataset
+        fi
+
+      else
+
+        echo "  Is Not Edge Dataset -> Unallowing on Dataset (mount,destroy)..."
+
+        if [[ "$dry_run" == false ]]; then
+          sudo zfs unallow -d -u manager $permissions_snapshot_edge $dataset
+        fi
+
+      fi
+
+    else
+
+      echo "  Snapshotting Disabled -> Unallowing on Dataset + Descendents ($permissions_snapshot_and_send + $permissions_snapshot_edge)..."
+
+      if [[ "$dry_run" == false ]]; then
+        sudo zfs unallow -u manager $permissions_snapshot_and_send $dataset
+        sudo zfs unallow -d -u manager $permissions_snapshot_edge $dataset
+      fi
+
+    fi
+
+  done
+  
+  echo ""
+
+} 
 
 function remove_holds_delete_snapshots() {
 
@@ -800,7 +903,9 @@ function remove_holds_delete_snapshots() {
 
         echo "        Destroying ..."
 
-        if [[ "$dry_run" == false ]]; then
+        # Added safty check to make sure this is actually a snapshot.
+        if [[ "$dry_run" == false && $snapshot=*"@"* ]]; then
+          
           sudo zfs destroy "$snapshot"
         fi
 
