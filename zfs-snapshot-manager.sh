@@ -491,8 +491,8 @@ function display_list_table() {
       echo ""
 
       case "$choice" in
-        1) add_properties selected ;;
-        2) remove_properties selected ;;
+        1) set_properties selected ;;
+        2) clear_properties selected ;;
         3) create_snapshots selected ;;
         4) set_snapshot_permissions selected ;;
         5) remove_holds_delete_snapshots selected "$type" false ;;
@@ -521,11 +521,11 @@ function display_list_table() {
 
       # elif [[ "$response" =~ ^[Aa]$ ]]; then
 
-      #   add_properties selected
+      #   add_property selected
 
       # elif [[ "$response" =~ ^[Rr]$ ]]; then
 
-      #   remove_properties selected
+      #   clear_properties selected
 
       # elif [[ "$response" =~ ^[Pp]$ ]]; then
 
@@ -583,11 +583,14 @@ function create_snapshots() {
 
 }
 
-function add_properties() {
+function add_property() {
 
-  local -n items=$1
+  local -n add_items=$1
 
   local -r valid_input_pattern="^[0-9a-z_-]+$"
+
+  echo "New Property Name / Value"
+  echo ""
 
   while true; do
 
@@ -650,7 +653,7 @@ function add_properties() {
       break
     fi
 
-    if [[ ! "$value" =~ "^[a-z]+$" ]]; then
+    if [[ ! "$value" =~ ^[a-z]+$ ]]; then
       echo "Invalid input. Please only use lowercase characters for the value."
       echo ""
     else
@@ -662,7 +665,7 @@ function add_properties() {
   echo "Adding Propery"
   echo "---------------------------------------------------------------------"
 
-  for item in "${items[@]}"; do
+  for item in "${add_items[@]}"; do
 
     dataset=$(echo "$item" | awk '{print $2}')
 
@@ -690,15 +693,110 @@ function add_properties() {
 
 }
 
-function remove_properties() {
+function set_properties() {
 
-  local -n items=$1
+  local -n set_items=$1
+
+  local properties=()
+
+  local properties=$(zfs get -o name,property,value -s local all -r | grep ':' | awk '{print $2}' | sort | uniq)
+
+  if [[ -z $properties ]]; then
+
+    local prompt="No custom properties found. Create a (N)ew property or (C)ancel: "
+    echo ""
+  
+  else
+
+    local index=1
+    local properties_array=()
+    while IFS= read -r property; do
+        properties_array+=("$index $property")
+        ((index++))
+    done <<< "$properties"
+
+    for prop in "${properties_array[@]}"; do
+      echo "$prop"
+    done
+    echo ""
+    
+    local prompt="Enter the ID of the property to set for the selected datasets, create a (N)ew property or (C)ancel: "
+
+  fi
+
+  local selected_id=""
+  while [[ ! "$selected_id" =~ ^[0-9]+$ || "$selected_id" -lt 1 || "$selected_id" -ge "$index" ]]; do
+
+    read -p "$prompt" selected_id
+    echo ""
+
+    if [[ "$selected_id" =~ ^[Cc]$  ]]; then
+      echo "Operation canceled."
+      echo ""
+      return
+    fi
+
+    if [[ "$selected_id" =~ ^[Nn]$ ]]; then
+
+      add_property set_items
+      return
+    fi
+
+    if [[ ! "$selected_id" =~ ^[0-9]+$ || "$selected_id" -lt 1 || "$selected_id" -ge "$index" ]]; then
+      echo "Invalid input. Please enter a valid ID or 'c' to cancel."
+      echo ""
+    fi
+
+  done
+
+  local property=""
+  for prop in "${properties_array[@]}"; do
+    if [[ "$prop" == "$selected_id "* ]]; then
+      property=$(echo "$prop" | awk '{print $2}')
+      break
+    fi
+  done
+
+  echo "Setting Property"
+  echo "---------------------------------------------------------------------"
+
+  for item in "${set_items[@]}"; do
+
+    dataset=$(echo "$item" | awk '{print $2}')
+
+    echo ""
+    echo "$dataset" 
+    echo "   |"
+    echo "   '--> [$property=true]"
+    echo "         Setting ..."
+
+    if [[ "$dry_run" == false ]]; then
+      sudo zfs set $property=true $dataset 
+    fi
+
+  done
+
+  echo ""
+  echo "---------------------------------------------------------------------"
+  echo ""
+
+  if [[ "$dry_run" == false ]]; then
+    
+    main
+
+  fi
+
+}
+
+function clear_properties() {
+
+  local -n remove_items=$1
 
   local properties=()
   local index=1
 
   # Get unique properties for selected datasets
-  for item in "${items[@]}"; do
+  for item in "${remove_items[@]}"; do
 
     properties_string=$(echo "$item" | awk '{print $3}')
     IFS=',' read -ra dataset_properties <<< "$properties_string"
@@ -756,14 +854,14 @@ function remove_properties() {
   echo "Clear Propery"
   echo "---------------------------------------------------------------------"
 
-  for item in "${items[@]}"; do
+  for item in "${remove_items[@]}"; do
 
     dataset=$(echo "$item" | awk '{print $2}')
     echo ""
     echo "$dataset" 
     echo "  |"
-    echo "  '--> [$property]"
-    echo "        Clearing (setting 'false')..."
+    echo "  '--> [$property=false]"
+    echo "        Clearing ..."
 
     if [[ "$dry_run" == false ]]; then
       sudo zfs set $property=false $dataset
@@ -782,6 +880,89 @@ function remove_properties() {
   fi
 
 }
+
+function remove_property() {
+
+  local properties=()
+
+  local properties=$(zfs get -o name,property,value -s local all -r | grep ':' | awk '{split($1, arr, "/"); print arr[1], $2}' | sort | uniq)
+
+  if [[ -z $properties ]]; then
+
+    echo "No custom properties found."
+    echo ""
+    return
+  
+  else
+
+    echo "Custom Properties on All Pools:"
+    echo ""
+
+    local index=1
+    local properties_array=()
+    while IFS= read -r property; do
+        properties_array+=("$index $property")
+        ((index++))
+    done <<< "$properties"
+
+    for prop in "${properties_array[@]}"; do
+      echo "$prop"
+    done
+    echo ""
+
+  fi
+
+  local selected_id=""
+  while [[ ! "$selected_id" =~ ^[0-9]+$ || "$selected_id" -lt 1 || "$selected_id" -ge "$index" ]]; do
+
+    read -p "Enter the ID of the property to remove for a specific pool or (C)ancel: " selected_id
+    echo ""
+
+    if [[ "$selected_id" =~ ^[Cc]$  ]]; then
+      echo "Operation canceled."
+      echo ""
+      return
+    fi
+
+    if [[ ! "$selected_id" =~ ^[0-9]+$ || "$selected_id" -lt 1 || "$selected_id" -ge "$index" ]]; then
+      echo "Invalid input. Please enter a valid ID or 'c' to cancel."
+      echo ""
+    fi
+
+  done
+
+  local property=""
+  for prop in "${properties_array[@]}"; do
+    if [[ "$prop" == "$selected_id "* ]]; then
+      property=$(echo "$prop" | awk '{print $3}')
+      pool=$(echo "$prop" | awk '{print $2}')
+      break
+    fi
+  done
+
+  echo "Remove Propery"
+  echo "---------------------------------------------------------------------"
+
+  echo ""
+  echo "$pool" 
+  echo "  |"
+  echo "  '--> [$property=false]"
+  echo "        Removing ..."
+
+  # Extra check to ensure we are removing a custom property.
+  if [[ "$dry_run" == false && "$property" == *":"* ]]; then
+    sudo zfs inherit -r $property $pool
+  fi
+
+  echo ""
+  echo "---------------------------------------------------------------------"
+  echo ""
+
+  main
+
+}
+
+
 
 function set_snapshot_permissions() {
 
@@ -1081,6 +1262,7 @@ function show_menu() {
   echo "#  2. List Datasets by Property          #"
   echo "#  3. List Snapshots by Name             #"
   echo "#  4. List Snapshots by Hold             #"
+  echo "#  5. Remove Property (Global)           #"
   echo "#                                        #"
   echo "#  c. Change Root                        #" 
   echo "#  q. Quit                               #"
@@ -1111,6 +1293,7 @@ function show_menu() {
     2) display_items "Properties" "datasets" "${datasets_with_property_count}" datasets_snapshot_property_table datasets_with_property_table datasets_table_headers;;
     3) display_items "Snapshots" "snapshots" "${datasets_with_snapshots_count}" dataset_snapshot_names_table dataset_snapshots_table dataset_snapshots_table_headers;;
     4) display_items "Holds" "snapshots" "${dataset_snapshots_with_hold_count}" dataset_snapshot_holds_table dataset_snapshots_table dataset_snapshots_table_headers;;
+    5) remove_property ;;
     c) change_root_dataset ;;
     q) exit 0 ;;
     *) echo "Invalid option. Please try again."
