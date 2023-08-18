@@ -428,63 +428,115 @@ function display_list_table() {
 
     if [[ "$type" == "snapshots" ]]; then
 
-      # Prompt user for action
-      read -r -p "Do you want to release holds and (D)estroy snapshots, release snapshot (H)olds only, or go (B)ack?: " response
+      echo " Select Action:"
+      echo ""
+      echo " 1. Release Holds"
+      echo " 2. Destroy Snapshots"
+      echo ""
+      echo " b. Back"
+      echo " q. Quit"
+      echo ""
+      echo "---------------------------------------------------------------------------------------------------------------------------"
       echo ""
 
-      if [[ "$response" =~ ^[Dd]$ ]]; then
+      # Prompt user for action
+      read -p "Enter your choice: " choice
+      echo ""
 
-        remove_holds_delete_snapshots selected "$type" true
+      case "$choice" in
+        1) remove_holds_delete_snapshots selected "$type" false ;;
+        2) remove_holds_delete_snapshots selected "$type" true ;;
+        b) return ;;
+        q) exit 0 ;;
+        *) echo "Invalid option. Please try again."
+          echo ""
+      esac
 
-      elif [[ "$response" =~ ^[Hh]$ ]]; then
+      # if [[ "$response" =~ ^[Dd]$ ]]; then
 
-        remove_holds_delete_snapshots selected "$type" false
+      #   remove_holds_delete_snapshots selected "$type" true
 
-      else
+      # elif [[ "$response" =~ ^[Hh]$ ]]; then
 
-        echo "Action canceled. No snapshots were modified."
-        echo ""
+      #   remove_holds_delete_snapshots selected "$type" false
 
-      fi
+      # else
+
+      #   echo "Action canceled. No snapshots were modified."
+      #   echo ""
+
+      # fi
 
     fi
 
     if [[ "$type" == "datasets" ]]; then 
 
-      # Prompt user for action
-      read -r -p "Do you want to (A)dd or (R)emove a snapshot property, (C)reate snapshots, (D)estroy snapshots release (H)olds or go (B)ack?: " response
+      echo " Select Action:"
+      echo ""
+      echo " 1. Set Property"
+      echo " 2. Clear Property"
+      echo " 3. Create Snapshot"
+      echo " 4. Set Permissions"    
+      echo " 5. Destroy Snapshots"
+      echo " 6. Release Holds"
+      echo ""
+      echo " b. Back"
+      echo " q. Quit"
+      echo ""
+      echo "---------------------------------------------------------------------------------------------------------------------------"
       echo ""
 
-      if [[ "$response" =~ ^[Dd]$ ]]; then
+      # Prompt user for action
+      read -p "Enter your choice: " choice
+      echo ""
 
-        remove_holds_delete_snapshots selected "$type" true
+      case "$choice" in
+        1) add_properties selected ;;
+        2) remove_properties selected ;;
+        3) create_snapshots selected ;;
+        4) set_snapshot_permissions selected ;;
+        5) remove_holds_delete_snapshots selected "$type" false ;;
+        6) remove_holds_delete_snapshots selected "$type" true ;;
+        b) return ;;
+        q) exit 0 ;;
+        *) echo "Invalid option. Please try again."
+          echo ""
+      esac
 
-      elif [[ "$response" =~ ^[Hh]$ ]]; then
+      # # Prompt user for action
+      # read -r -p "Do you want to (A)dd or (R)emove a snapshot property, (C)reate snapshots, (D)estroy snapshots release (H)olds or go (B)ack?: " response
+      # echo ""
 
-        remove_holds_delete_snapshots selected "$type" false
+      # if [[ "$response" =~ ^[Dd]$ ]]; then
 
-      elif [[ "$response" =~ ^[Cc]$ ]]; then
+      #   remove_holds_delete_snapshots selected "$type" true
 
-        create_snapshots selected
+      # elif [[ "$response" =~ ^[Hh]$ ]]; then
 
-      elif [[ "$response" =~ ^[Aa]$ ]]; then
+      #   remove_holds_delete_snapshots selected "$type" false
 
-        add_properties selected
+      # elif [[ "$response" =~ ^[Cc]$ ]]; then
 
-      elif [[ "$response" =~ ^[Rr]$ ]]; then
+      #   create_snapshots selected
 
-        remove_properties selected
+      # elif [[ "$response" =~ ^[Aa]$ ]]; then
 
-      elif [[ "$response" =~ ^[Pp]$ ]]; then
+      #   add_properties selected
 
-        set_snapshot_permissions selected
+      # elif [[ "$response" =~ ^[Rr]$ ]]; then
 
-      else
+      #   remove_properties selected
 
-        echo "Action canceled. No datasets were modified."
-        echo ""
+      # elif [[ "$response" =~ ^[Pp]$ ]]; then
 
-      fi
+      #   set_snapshot_permissions selected
+
+      # else
+
+      #   echo "Action canceled. No datasets were modified."
+      #   echo ""
+
+      # fi
 
     fi
 
