@@ -514,21 +514,6 @@ function display_list_table() {
           echo ""
       esac
 
-      # if [[ "$response" =~ ^[Dd]$ ]]; then
-
-      #   remove_holds_delete_snapshots selected "$type" true
-
-      # elif [[ "$response" =~ ^[Hh]$ ]]; then
-
-      #   remove_holds_delete_snapshots selected "$type" false
-
-      # else
-
-      #   echo "Action canceled. No snapshots were modified."
-      #   echo ""
-
-      # fi
-
     fi
 
     if [[ "$type" == "datasets" ]]; then 
@@ -564,41 +549,6 @@ function display_list_table() {
         *) echo "Invalid option. Please try again."
           echo ""
       esac
-
-      # # Prompt user for action
-      # read -r -p "Do you want to (A)dd or (R)emove a snapshot property, (C)reate snapshots, (D)estroy snapshots release (H)olds or go (B)ack?: " response
-      # echo ""
-
-      # if [[ "$response" =~ ^[Dd]$ ]]; then
-
-      #   remove_holds_delete_snapshots selected "$type" true
-
-      # elif [[ "$response" =~ ^[Hh]$ ]]; then
-
-      #   remove_holds_delete_snapshots selected "$type" false
-
-      # elif [[ "$response" =~ ^[Cc]$ ]]; then
-
-      #   create_snapshots selected
-
-      # elif [[ "$response" =~ ^[Aa]$ ]]; then
-
-      #   add_property selected
-
-      # elif [[ "$response" =~ ^[Rr]$ ]]; then
-
-      #   clear_properties selected
-
-      # elif [[ "$response" =~ ^[Pp]$ ]]; then
-
-      #   set_snapshot_permissions selected
-
-      # else
-
-      #   echo "Action canceled. No datasets were modified."
-      #   echo ""
-
-      # fi
 
     fi
 
