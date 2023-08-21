@@ -8,6 +8,7 @@ CLEAR="\e[0m"
 
 dry_run=false
 root_dataset=""
+user=$(whoami)
 
 exclude_datasets="datasets\|external"
 
@@ -104,6 +105,14 @@ function gather_snapshot_data() {
   index=1
   while IFS=$'\t' read -r dataset; do
 
+    get_permissions "$dataset"
+
+    if [[ -z "$permissions" ]]; then
+
+      permissions="-"
+
+    fi
+
     # Find datasets that has a custom property (:) set to 'true'.
     properties=$(zfs get all -H -o property,value "$dataset" | grep -E ':.*true' | awk '{print $1}' | sort | paste -s -d, -)
 
@@ -113,58 +122,58 @@ function gather_snapshot_data() {
 
       properties="-"
 
-      datasets_without_property_table+=("$index $dataset $properties $snapshots")
+      datasets_without_property_table+=("$index $dataset $properties $snapshots $permissions")
 
       if [[ $snapshots -lt 1 ]]; then
 
-        datasets_without_snapshot_table+=("$index $dataset $properties $snapshots")
+        datasets_without_snapshot_table+=("$index $dataset $properties $snapshots $permissions")
 
       else
 
-        datasets_with_snapshot_no_property_table+=("$index $dataset $properties $snapshots")
+        datasets_with_snapshot_no_property_table+=("$index $dataset $properties $snapshots $permissions")
 
-        datasets_with_snapshot_table+=("$index $dataset $properties $snapshots")
+        datasets_with_snapshot_table+=("$index $dataset $properties $snapshots $permissions")
 
       fi
 
     else
 
-      datasets_with_property_table+=("$index $dataset $properties $snapshots")
+      datasets_with_property_table+=("$index $dataset $properties $snapshots $permissions")
 
       if [[ $snapshots -lt 1 ]]; then
 
-        datasets_without_snapshot_table+=("$index $dataset $properties $snapshots")
+        datasets_without_snapshot_table+=("$index $dataset $properties $snapshots $permissions")
 
-        datasets_with_property_no_snapshot_table+=("$index $dataset $properties $snapshots")
+        datasets_with_property_no_snapshot_table+=("$index $dataset $properties $snapshots $permissions")
 
       else
 
-        datasets_with_snapshot_table+=("$index $dataset $properties $snapshots")
+        datasets_with_snapshot_table+=("$index $dataset $properties $snapshots $permissions")
 
       fi
 
     fi
 
-    datasets_table+=("$index $dataset $properties $snapshots")
+    datasets_table+=("$index $dataset $properties $snapshots $permissions")
 
     ((index++))
 
   done < <(zfs list -H -o name -t filesystem -r $root_dataset | grep -ivw $exclude_datasets)
-  datasets_count=${#datasets_table[@]}  
+  datasets_count=${#datasets_table[@]}
   datasets_with_property_count=${#datasets_with_property_table[@]}
   datasets_with_snapshots_count=${#datasets_with_snapshot_table[@]}
   datasets_without_snapshots_count=${#datasets_without_snapshot_table[@]}
   datasets_without_property_count=${#datasets_without_property_table[@]}
   datasets_with_property_no_snapshot_count=${#datasets_with_property_no_snapshot_table[@]}
   datasets_with_snapshot_no_property_count=${#datasets_with_snapshot_no_property_table[@]}
-  datasets_table_headers=("ID Dataset Properties Snapshots")
-
-  # Get all datasets with snapshot properties and a list of unique property names
-  datasets_with_snapshot_properties=$(zfs get -o name,property,value -s local all -r $root_dataset | grep ':')
-  dataset_snapshot_property_names=$(echo "$datasets_with_snapshot_properties" | awk '{print $2}' | sort | uniq)
+  datasets_table_headers=("ID Dataset Properties Snapshots Permissions(L|D)")
 
   # Store unique properties and their counts in tables
   if [[ "$datasets_with_property_count" -gt 0 ]]; then
+
+    # Get all datasets with snapshot properties and a list of unique property names
+    datasets_with_snapshot_properties=$(zfs get -o name,property,value -s local all -r $root_dataset | grep ':')
+    dataset_snapshot_property_names=$(echo "$datasets_with_snapshot_properties" | awk '{print $2}' | sort | uniq)
 
     property_names=("")
     property_counts=("")
@@ -182,12 +191,12 @@ function gather_snapshot_data() {
 
   fi
 
-  # Get all snapshots (exclude selected) and  a list of unique snapshot names
-  dataset_snapshots=$(zfs list -H -o name -t snapshot -r $root_dataset | grep -ivw $exclude_datasets)
-  dataset_snapshot_names=$(echo "$dataset_snapshots" | awk -F'@' '{print $2}' | sort | uniq)
-
   # Store unique snapshot names and their counts in table
   if [[ "$dataset_snapshots_count" -gt 0 ]]; then
+
+    # Get all snapshots (exclude selected) and  a list of unique snapshot names
+    dataset_snapshots=$(zfs list -H -o name -t snapshot -r $root_dataset | grep -ivw $exclude_datasets)
+    dataset_snapshot_names=$(echo "$dataset_snapshots" | awk -F'@' '{print $2}' | sort | uniq)
 
     snapshot_names=("")
     snapshot_counts=("")
@@ -205,12 +214,12 @@ function gather_snapshot_data() {
 
   fi
 
-  # Get all snapshots with hold tags and a list of unique tag names
-  dataset_snapshots_with_holds=$(echo "$dataset_snapshots" | tr '\n' '\0' | xargs -0 zfs holds -H | sort | sed '/^\s*$/d')
-  dataset_snapshot_hold_tags=$(echo "$dataset_snapshots_with_holds" | awk '{print $2}' | uniq)
-
   # Store unique snapshot hold tags and their counts in table
   if [[ "$dataset_snapshots_with_hold_count" -gt 0 ]]; then 
+
+    # Get all snapshots with hold tags and a list of unique tag names
+    dataset_snapshots_with_holds=$(echo "$dataset_snapshots" | tr '\n' '\0' | xargs -0 zfs holds -H | sort | sed '/^\s*$/d')
+    dataset_snapshot_hold_tags=$(echo "$dataset_snapshots_with_holds" | awk '{print $2}' | uniq)
 
     hold_names=("")
     hold_counts=("")
@@ -229,6 +238,59 @@ function gather_snapshot_data() {
   fi
 
 } 
+
+function get_permissions() {
+
+  local dataset="$1"
+
+  # Run the zfs command and filter the output using awk
+  zfs_output=$(zfs allow "$dataset")
+  permissions=$(echo "$zfs_output" | awk -v path="$dataset" '
+      BEGIN { in_local_section = 0; in_descendent_section = 0 }
+      /^---- Permissions on / {
+          if (in_local_section) {
+              in_local_section = 0
+          }
+          if (in_descendent_section) {
+              in_descendent_section = 0
+          }
+          section_path = $4
+      }
+      $0 ~ "Local\\+Descendent permissions:" && section_path == path {
+          in_local_section = 1
+          next
+      }
+      $0 ~ "Descendent permissions:" && section_path == path {
+          in_descendent_section = 1
+          next
+      }
+      (in_local_section || in_descendent_section) && $0 ~ /^[[:space:]]+/ {
+          # Split the line using spaces and print from the third field onwards
+          for (i = 3; i <= NF; i++) {
+              permission = $i
+              if (i < NF) {
+                  permission = permission ","
+              }
+              if (in_local_section) {
+                  local_permissions = local_permissions permission
+              } else if (in_descendent_section) {
+                  descendent_permissions = descendent_permissions permission
+              }
+          }
+      }
+      (in_local_section || in_descendent_section) && NF == 0 {
+          in_local_section = 0
+          in_descendent_section = 0
+      }
+      END {
+          if (descendent_permissions) {
+              local_permissions = local_permissions "|"
+          }
+          printf local_permissions descendent_permissions
+      }
+  ')
+
+}
 
 function display_summary() {
 
@@ -250,16 +312,16 @@ function display_summary() {
   printf '%s\n' "${summary_table[@]}" | column -t -s "|"
   echo ""
   
-  read -p "List items in each summary by entering the ID ('m' for menu or 'q' to quit): " selected_index
+  read -p "Enter the ID to list items, go back to (M)enu or (Q)uit: " selected_index
   echo ""
 
   # Check if the user wants to quit
-  if [[ "$selected_index" == "q" ]]; then
+  if [[ "$selected_index"  =~ ^[Qq]$ ]]; then
     exit 0
   fi
 
   # Check if the user wants to return to the menu
-  if [[ "$selected_index" == "m" ]]; then
+  if [[ "$selected_index"  =~ ^[Mm]$ ]]; then
     show_menu
     return
   fi
@@ -340,7 +402,7 @@ function display_list_table() {
     echo ""
 
     # Prompt user for options
-    read -r -p "Do you want to apply actions to (A)ll snapshots or (S)elected snapshots or go (B)ack?: " choice
+    read -r -p "Do you want to apply actions to (A)ll items, (S)elected items or go (B)ack?: " choice
     echo ""
 
     if [[ "$choice" =~ ^[Aa]$ ]]; then
@@ -477,8 +539,8 @@ function display_list_table() {
       echo " 2. Clear Property"
       echo " 3. Create Snapshot"
       echo " 4. Set Permissions"    
-      echo " 5. Destroy Snapshots"
-      echo " 6. Release Holds"
+      echo " 5. Release Holds"
+      echo " 6. Destroy Snapshots"
       echo ""
       echo " b. Back"
       echo " q. Quit"
@@ -675,7 +737,7 @@ function add_property() {
     echo "   '--> [$property=$value]"
     echo "         Adding ..."
 
-    if [[ "$dry_run" == false ]]; then
+    if [[ "$dry_run" == false && "$property" == *":"* ]]; then
       sudo zfs set $property=$value $dataset 
     fi
 
@@ -770,7 +832,7 @@ function set_properties() {
     echo "   '--> [$property=true]"
     echo "         Setting ..."
 
-    if [[ "$dry_run" == false ]]; then
+    if [[ "$dry_run" == false && "$property" == *":"* ]]; then
       sudo zfs set $property=true $dataset 
     fi
 
@@ -863,7 +925,7 @@ function clear_properties() {
     echo "  '--> [$property=false]"
     echo "        Clearing ..."
 
-    if [[ "$dry_run" == false ]]; then
+    if [[ "$dry_run" == false && "$property" == *":"* ]]; then
       sudo zfs set $property=false $dataset
     fi
 
@@ -921,7 +983,7 @@ function remove_property() {
     if [[ "$selected_id" =~ ^[Cc]$  ]]; then
       echo "Operation canceled."
       echo ""
-      return
+      show_menu
     fi
 
     if [[ ! "$selected_id" =~ ^[0-9]+$ || "$selected_id" -lt 1 || "$selected_id" -ge "$index" ]]; then
@@ -961,8 +1023,6 @@ function remove_property() {
   main
 
 }
-
-
 
 function set_snapshot_permissions() {
 
@@ -1021,7 +1081,7 @@ function set_snapshot_permissions() {
       echo "  Snapshotting Enabled -> Allowing on Dataset + Descendents ($permissions_snapshot_and_send)..."
 
       if [[ "$dry_run" == false ]]; then
-        sudo zfs allow -u manager $permissions_snapshot_and_send $dataset
+        sudo zfs allow -u $user $permissions_snapshot_and_send $dataset
       fi
 
       if [[ $dataset_is_edge == true ]]; then
@@ -1029,7 +1089,7 @@ function set_snapshot_permissions() {
         echo "  Is Edge Dataset -> Allowing on Descendents ($permissions_snapshot_edge)..."
 
         if [[ "$dry_run" == false ]]; then
-          sudo zfs allow -d -u manager $permissions_snapshot_edge $dataset
+          sudo zfs allow -d -u $user $permissions_snapshot_edge $dataset
         fi
 
       else
@@ -1037,7 +1097,7 @@ function set_snapshot_permissions() {
         echo "  Is Not Edge Dataset -> Unallowing on Dataset (mount,destroy)..."
 
         if [[ "$dry_run" == false ]]; then
-          sudo zfs unallow -d -u manager $permissions_snapshot_edge $dataset
+          sudo zfs unallow -d -u $user $permissions_snapshot_edge $dataset
         fi
 
       fi
@@ -1047,8 +1107,8 @@ function set_snapshot_permissions() {
       echo "  Snapshotting Disabled -> Unallowing on Dataset + Descendents ($permissions_snapshot_and_send + $permissions_snapshot_edge)..."
 
       if [[ "$dry_run" == false ]]; then
-        sudo zfs unallow -u manager $permissions_snapshot_and_send $dataset
-        sudo zfs unallow -d -u manager $permissions_snapshot_edge $dataset
+        sudo zfs unallow -u $user $permissions_snapshot_and_send $dataset
+        sudo zfs unallow -d -u $user $permissions_snapshot_edge $dataset
       fi
 
     fi
@@ -1056,6 +1116,12 @@ function set_snapshot_permissions() {
   done
   
   echo ""
+
+  if [[ "$dry_run" == false ]]; then
+    
+    main
+
+  fi
 
 } 
 
@@ -1275,7 +1341,9 @@ function show_menu() {
   else
     echo -e "Root Dataset: ${root_dataset}"
   fi
+  echo "User: $user"
   echo ""
+
 
   if [[ "$dry_run" == true ]]; then
     echo -e "${GREEN}Script is in test mode ... no ZFS commands will be executed.${CLEAR}"
