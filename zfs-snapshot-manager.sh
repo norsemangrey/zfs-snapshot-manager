@@ -7,20 +7,23 @@ GREEN="\e[92m"
 CLEAR="\e[0m"
 
 dry_run=false
-root_dataset=""
+include_parents=false
+top_dataset=""
 user=$(whoami)
 
-exclude_datasets="datasets\|external"
+# Exludes Docker generated datasets and USB connected drives.
+exclude_datasets="datasets/|external"
 
 function usage() {
-  echo "Usage: $0 [-d] --root <root_dataset>"
+  echo "Usage: $0 [-d] [-p] --top <top_dataset>"
   echo "Options:"
   echo "  -d, --dry-run   Perform a dry run (no zfs commands will be executed)"
-  echo "  -r, --root      Set the root dataset for ZFS snapshots data collection"
+  echo "  -t, --top       Set the top dataset for ZFS snapshots data collection"
+  echo "  -p, --parents   Includes parents of selected top dataset if any"
   exit 1
 }
 
-options=$(getopt -o dr: --long dry-run,root: -n 'zfs_snapshot_manager.sh' -- "$@")
+options=$(getopt -o dpr: --long dry-run,top,parents: -n 'zfs_snapshot_manager.sh' -- "$@")
 if [ $? -ne 0 ]; then
   echo "Error: Invalid option"
   usage
@@ -32,8 +35,11 @@ while true; do
     -d | --dry-run)
       dry_run=true
       shift ;;
-    -r | --root)
-      root_dataset="$2"
+    -p | --parents)
+      include_parents=true
+      shift ;;
+    -r | --top)
+      top_dataset="$2"
       shift 2 ;;
     --)
       shift; break ;;
@@ -43,18 +49,42 @@ while true; do
   esac
 done
 
-# Validate the root dataset if provided
-if [ -n "$root_dataset" ]; then
-  if ! zfs list -H "$root_dataset" &>/dev/null; then
-    echo "Error: Root dataset '$root_dataset' does not exist."
+
+# Validate the top dataset if provided
+if [ -n "$top_dataset" ]; then
+
+  if ! zfs list -H "$top_dataset" &>/dev/null; then
+    echo "Error: Top dataset '$top_dataset' does not exist."
     exit 1
   fi
+
+  IFS="/" read -ra dataset_parts <<< "$top_dataset"
+  root_dataset=${dataset_parts[0]}
+
 fi
 
 function gather_snapshot_data() {
 
   echo "Collecting data, please wait ..."
   echo ""
+
+  dataset_list=""
+  snapshot_list=""
+
+  # Get parents dataset names and snapshots.
+  if [[ "$include_parents" == true && -n "$top_dataset" ]]; then
+
+    parent=""
+    for ((i=0; i<${#dataset_parts[@]}-1; i++)); do
+        parent="$parent${dataset_parts[i]}"
+        dataset_list="$dataset_list$parent"$'\n'
+        snapshot_list="$snapshot_list$(zfs list -H -o name,creation -t snapshot $parent)"$'\n'
+        parent="$parent/"
+    done
+
+  fi
+
+  snapshot_list="$snapshot_list$(zfs list -H -o name,creation -t snapshot -r $top_dataset | grep -vE $exclude_datasets)"
 
   # Create snapshot tables with tab-separated values
   dataset_snapshots_table=()
@@ -89,10 +119,12 @@ function gather_snapshot_data() {
     dataset_snapshots_table+=("$index $dataset_name $snapshot_name $dataset_properties $hold_tags $creation_date")
     ((index++))
 
-  done < <(zfs list -H -o name,creation -t snapshot -r $root_dataset | grep -ivw $exclude_datasets)
+  done <<< "$snapshot_list"
   dataset_snapshots_count=${#dataset_snapshots_table[@]}
   dataset_snapshots_with_hold_count=${#dataset_snapshots_with_hold_table[@]}
   dataset_snapshots_table_headers=("ID Dataset Snapshot Properties Holds Created")
+
+  dataset_list="$dataset_list$(zfs list -H -o name -t filesystem -r $top_dataset | grep -vE $exclude_datasets)"
 
   # Create dataset tables with tab-separated values
   datasets_table=()
@@ -158,7 +190,7 @@ function gather_snapshot_data() {
 
     ((index++))
 
-  done < <(zfs list -H -o name -t filesystem -r $root_dataset | grep -ivw $exclude_datasets)
+  done <<< "$dataset_list"
   datasets_count=${#datasets_table[@]}
   datasets_with_property_count=${#datasets_with_property_table[@]}
   datasets_with_snapshots_count=${#datasets_with_snapshot_table[@]}
@@ -172,11 +204,12 @@ function gather_snapshot_data() {
   if [[ "$datasets_with_property_count" -gt 0 ]]; then
 
     # Get all datasets with snapshot properties and a list of unique property names
-    datasets_with_snapshot_properties=$(zfs get -o name,property,value -s local all -r $root_dataset | grep ':')
+    datasets_with_snapshot_properties=$(echo "$dataset_list" | tr '\n' '\0' | xargs -0 zfs get -o name,property,value -s local all | grep ':')
     dataset_snapshot_property_names=$(echo "$datasets_with_snapshot_properties" | awk '{print $2}' | sort | uniq)
 
     property_names=("")
     property_counts=("")
+
 
     while IFS= read -r property; do
       property_count=$(echo "$datasets_with_snapshot_properties" | grep 'true' | grep -c "$property" )
@@ -195,7 +228,7 @@ function gather_snapshot_data() {
   if [[ "$dataset_snapshots_count" -gt 0 ]]; then
 
     # Get all snapshots (exclude selected) and  a list of unique snapshot names
-    dataset_snapshots=$(zfs list -H -o name -t snapshot -r $root_dataset | grep -ivw $exclude_datasets)
+    dataset_snapshots=$(echo "$dataset_list" | tr '\n' '\0' | xargs -0 zfs list -H -o name -t snapshot)
     dataset_snapshot_names=$(echo "$dataset_snapshots" | awk -F'@' '{print $2}' | sort | uniq)
 
     snapshot_names=("")
@@ -597,8 +630,9 @@ function create_snapshots() {
 
 function add_property() {
 
-  local -n add_items=$1
-
+  local from_set_property="$1"
+  local -n temp_items=$2
+ 
   local -r valid_input_pattern="^[0-9a-z_-]+$"
 
   echo "New Property Name / Value"
@@ -650,7 +684,7 @@ function add_property() {
 
   while true; do
 
-    read -r -p "Provide property value ('c' to cancel, default=true): " value
+    read -r -p "Provide property value ('c' to cancel, default=false): " value
     echo ""
 
     # Check if the user wants to cancel
@@ -661,7 +695,7 @@ function add_property() {
     fi
 
     if [[ -z "$value" ]]; then
-      value="true"
+      value="false"
       break
     fi
 
@@ -677,9 +711,10 @@ function add_property() {
   echo "Adding Propery"
   echo "---------------------------------------------------------------------"
 
+  add_items=($(zfs list -H -o name -t filesystem -r $root_dataset | grep -vE $exclude_datasets))
   for item in "${add_items[@]}"; do
 
-    dataset=$(echo "$item" | awk '{print $2}')
+    dataset=$(echo "$item")
 
     echo ""
     echo "$dataset" 
@@ -697,8 +732,12 @@ function add_property() {
   echo "---------------------------------------------------------------------"
   echo ""
 
-  if [[ "$dry_run" == false ]]; then
-    
+  if [[ "$from_set_property" == true ]]; then
+  
+    set_properties temp_items
+
+  else
+
     main
 
   fi
@@ -749,8 +788,7 @@ function set_properties() {
     fi
 
     if [[ "$selected_id" =~ ^[Nn]$ ]]; then
-
-      add_property set_items
+      add_property true set_items
       return
     fi
 
@@ -1152,7 +1190,7 @@ function remove_holds_delete_snapshots() {
 
         echo "        Destroying ..."
 
-        # Added safty check to make sure this is actually a snapshot.
+        # Added safety check to make sure this is actually a snapshot.
         if [[ "$dry_run" == false && $snapshot=*"@"* ]]; then
           
           sudo zfs destroy "$snapshot"
@@ -1233,32 +1271,32 @@ function display_items() {
 
 }
 
-function change_root_dataset() {
+function change_top_dataset() {
 
-  read -p "Enter the new root dataset name or hit enter for all ('m' for menu or 'q' to quit): " new_root_dataset
+  read -p "Enter the new top dataset name or hit enter for all ('m' for menu or 'q' to quit): " new_top_dataset
   echo ""
 
   # Check if the user wants to quit
-  if [[ "$new_root_dataset" == "q" ]]; then
+  if [[ "$new_top_dataset" == "q" ]]; then
     exit 0
   fi
 
   # Check if the user wants to return to the menu
-  if [[ "$new_root_dataset" == "m" ]]; then
+  if [[ "$new_top_dataset" == "m" ]]; then
     show_menu
     return
   fi
 
-  if [ -n "$new_root_dataset" ] && ! zfs list -o name | grep -q "^$new_root_dataset$"; then
+  if [ -n "$new_top_dataset" ] && ! zfs list -o name | grep -q "^$new_top_dataset$"; then
 
-    echo "Dataset '$new_root_dataset' does not exist. Please enter a valid root dataset name."
+    echo "Dataset '$new_top_dataset' does not exist. Please enter a valid top dataset name."
     echo ""
-    change_root_dataset
+    change_top_dataset
     return
 
   else
 
-    root_dataset="$new_root_dataset"
+    top_dataset="$new_top_dataset"
     main
 
   fi
@@ -1278,22 +1316,29 @@ function show_menu() {
   echo "#  2. List Datasets by Property          #"
   echo "#  3. List Snapshots by Name             #"
   echo "#  4. List Snapshots by Hold             #"
-  echo "#  5. Remove Property (Global)           #"
+  echo "#  5. Add Property (Pool)                #"
+  echo "#  6. Remove Property (Pool)             #"
   echo "#                                        #"
-  echo "#  c. Change Root                        #" 
+  echo "#  c. Change Top                         #" 
   echo "#  q. Quit                               #"
   echo "#                                        #"
   echo "##########################################"
   echo ""
 
-  if [[ -z "$root_dataset" ]]; then
-    echo -e "Root Dataset: All Pool Roots"
-  else
-    echo -e "Root Dataset: ${root_dataset}"
-  fi
   echo "User: $user"
+  if [[ -z "$top_dataset" ]]; then
+    echo -e "Selected Dataset: All Pool Roots"
+  else
+    echo -e "Selected Dataset: ${top_dataset}"
+    echo -e "Root Dataset: ${root_dataset}"
+    echo ""
+    if [[ $include_parents == true ]]; then
+      echo -e "Including Parent Datasets"
+    else
+      echo -e "Excluding Parent Datasets"
+    fi
+  fi
   echo ""
-
 
   if [[ "$dry_run" == true ]]; then
     echo -e "${GREEN}Script is in test mode ... no ZFS commands will be executed.${CLEAR}"
@@ -1306,13 +1351,16 @@ function show_menu() {
   read -p "Enter your choice: " choice
   echo ""
 
+  empty_array=()
+
   case "$choice" in
     1) display_summary ;;
     2) display_items "Properties" "datasets" "${datasets_with_property_count}" datasets_snapshot_property_table datasets_with_property_table datasets_table_headers;;
     3) display_items "Snapshots" "snapshots" "${datasets_with_snapshots_count}" dataset_snapshot_names_table dataset_snapshots_table dataset_snapshots_table_headers;;
     4) display_items "Holds" "snapshots" "${dataset_snapshots_with_hold_count}" dataset_snapshot_holds_table dataset_snapshots_table dataset_snapshots_table_headers;;
-    5) remove_property ;;
-    c) change_root_dataset ;;
+    5) add_property false empty_array;;
+    6) remove_property ;;
+    c) change_top_dataset ;;
     q) exit 0 ;;
     *) echo "Invalid option. Please try again."
        echo ""
