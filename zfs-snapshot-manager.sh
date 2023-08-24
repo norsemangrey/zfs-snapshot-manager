@@ -19,7 +19,7 @@ function usage() {
   echo "Options:"
   echo "  -d, --dry-run   Perform a dry run (no zfs commands will be executed)"
   echo "  -t, --top       Set the top dataset for ZFS snapshots data collection"
-  echo "  -p, --parents   Includes parents of selected top dataset if any"
+  echo "  -p, --parents   Include parents of selected top dataset"
   exit 1
 }
 
@@ -48,7 +48,6 @@ while true; do
       exit 1 ;;
   esac
 done
-
 
 # Validate the top dataset if provided
 if [ -n "$top_dataset" ]; then
@@ -996,7 +995,7 @@ function remove_property() {
   echo ""
   echo "$pool" 
   echo "  |"
-  echo "  '--> [$property=false]"
+  echo "  '--> [$property]"
   echo "        Removing ..."
 
   # Extra check to ensure we are removing a custom property.
@@ -1017,7 +1016,7 @@ function set_snapshot_permissions() {
   local -n items=$1
 
   local permissions_snapshot_and_send="compression,hold,release,send,snapshot"
-  local permissions_snapshot_edge="mount,destroy"
+  local permissions_snapshot_leaf="mount,destroy"
 
   echo "Setting Snapshot Permissions"
   echo "---------------------------------------------------------------------"
@@ -1050,15 +1049,15 @@ function set_snapshot_permissions() {
 
     done
 
-    dataset_is_edge=false
-    if [[ $properties_string == *"type:edge"* ]]; then
+    dataset_is_leaf=false
+    if [[ $properties_string == *"snapshot-base"* ]]; then
 
       # Check if dataset has any children (if so we do not want to set destroy permissions)
       used_by_children=$(zfs get -H -o value -p usedbychildren $dataset)
 
       if [[ $used_by_children == 0 ]]; then
 
-        dataset_is_edge=true
+        dataset_is_leaf=true
 
       fi
 
@@ -1072,31 +1071,31 @@ function set_snapshot_permissions() {
         sudo zfs allow -u $user $permissions_snapshot_and_send $dataset
       fi
 
-      if [[ $dataset_is_edge == true ]]; then
+      if [[ $dataset_is_leaf == true ]]; then
 
-        echo "  Is Edge Dataset -> Allowing on Descendents ($permissions_snapshot_edge)..."
+        echo "  Is Leaf Dataset -> Allowing on Descendents ($permissions_snapshot_leaf)..."
 
         if [[ "$dry_run" == false ]]; then
-          sudo zfs allow -d -u $user $permissions_snapshot_edge $dataset
+          sudo zfs allow -d -u $user $permissions_snapshot_leaf $dataset
         fi
 
       else
 
-        echo "  Is Not Edge Dataset -> Unallowing on Dataset (mount,destroy)..."
+        echo "  Is Not Leaf Dataset -> Unallowing on Dataset (mount,destroy)..."
 
         if [[ "$dry_run" == false ]]; then
-          sudo zfs unallow -d -u $user $permissions_snapshot_edge $dataset
+          sudo zfs unallow -d -u $user $permissions_snapshot_leaf $dataset
         fi
 
       fi
 
     else
 
-      echo "  Snapshotting Disabled -> Unallowing on Dataset + Descendents ($permissions_snapshot_and_send + $permissions_snapshot_edge)..."
+      echo "  Snapshotting Disabled -> Unallowing on Dataset + Descendents ($permissions_snapshot_and_send + $permissions_snapshot_leaf)..."
 
       if [[ "$dry_run" == false ]]; then
         sudo zfs unallow -u $user $permissions_snapshot_and_send $dataset
-        sudo zfs unallow -d -u $user $permissions_snapshot_edge $dataset
+        sudo zfs unallow -d -u $user $permissions_snapshot_leaf $dataset
       fi
 
     fi
