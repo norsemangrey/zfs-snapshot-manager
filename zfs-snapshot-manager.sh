@@ -85,40 +85,45 @@ function gather_snapshot_data() {
 
   snapshot_list="$snapshot_list$(zfs list -H -o name,creation -t snapshot -r $top_dataset | grep -vE $exclude_datasets)"
 
-  # Create snapshot tables with tab-separated values
-  dataset_snapshots_table=()
-  dataset_snapshots_with_hold_table=()
-  index=1
-  while IFS=$'\t' read -r snapshot creation_date; do
+  if [[ -n "$snapshot_list" ]]; then
 
-    dataset_name=$(echo "$snapshot" | cut -d '@' -f 1)
-    snapshot_name=$(echo "$snapshot" | cut -d '@' -f 2)
+    # Create snapshot tables with tab-separated values
+    dataset_snapshots_table=()
+    dataset_snapshots_with_hold_table=()
+    index=1
+    while IFS=$'\t' read -r snapshot creation_date; do
 
-    # Find datasets that has a custom property (:) set to 'true'.
-    dataset_properties=$(zfs get all -H -o property,value "$snapshot" | grep -E ':.*true' | awk '{print $1}' | sort | paste -s -d, -)
-    
-    if [[ -z "$dataset_properties" ]]; then
+      dataset_name=$(echo "$snapshot" | cut -d '@' -f 1)
+      snapshot_name=$(echo "$snapshot" | cut -d '@' -f 2)
 
-      dataset_properties="-"
+      # Find datasets that has a custom property (:) set to 'true'.
+      dataset_properties=$(zfs get all -H -o property,value "$snapshot" | grep -E ':.*true' | awk '{print $1}' | sort | paste -s -d, -)
+      
+      if [[ -z "$dataset_properties" ]]; then
 
-    fi
+        dataset_properties="-"
 
-    hold_tags=$(zfs holds -H "$snapshot" | awk '{print $2}' | sort | paste -s -d, -)
+      fi
 
-    if [[ -z "$hold_tags" ]]; then
+      hold_tags=$(zfs holds -H "$snapshot" | awk '{print $2}' | sort | paste -s -d, -)
 
-      hold_tags="-"
+      if [[ -z "$hold_tags" ]]; then
 
-    else
+        hold_tags="-"
 
-      dataset_snapshots_with_hold_table+=("$index $dataset_name $snapshot_name $dataset_properties $hold_tags $creation_date")
+      else
 
-    fi
+        dataset_snapshots_with_hold_table+=("$index $dataset_name $snapshot_name $dataset_properties $hold_tags $creation_date")
 
-    dataset_snapshots_table+=("$index $dataset_name $snapshot_name $dataset_properties $hold_tags $creation_date")
-    ((index++))
+      fi
 
-  done <<< "$snapshot_list"
+      dataset_snapshots_table+=("$index $dataset_name $snapshot_name $dataset_properties $hold_tags $creation_date")
+      ((index++))
+
+    done <<< "$snapshot_list"
+
+  fi
+
   dataset_snapshots_count=${#dataset_snapshots_table[@]}
   dataset_snapshots_with_hold_count=${#dataset_snapshots_with_hold_table[@]}
   dataset_snapshots_table_headers=("ID Dataset Snapshot Properties Holds Created")
@@ -749,7 +754,7 @@ function set_properties() {
 
   local properties=()
 
-  local properties=$(zfs get -o name,property,value -s local all -r | grep ':' | awk '{print $2}' | sort | uniq)
+  local properties=$(zfs get -o name,property,value -s local,received all -r $root_dataset | grep ':' | awk '{print $2}' | sort | uniq)
 
   if [[ -z $properties ]]; then
 
