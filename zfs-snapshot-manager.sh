@@ -143,12 +143,6 @@ function gather_snapshot_data() {
 
     get_permissions "$dataset"
 
-    if [[ -z "$permissions" ]]; then
-
-      permissions="-"
-
-    fi
-
     # Find datasets that has a custom property (:) set to 'true'.
     properties=$(zfs get all -H -o property,value "$dataset" | grep -E ':.*true' | awk '{print $1}' | sort | paste -s -d, -)
 
@@ -202,7 +196,7 @@ function gather_snapshot_data() {
   datasets_without_property_count=${#datasets_without_property_table[@]}
   datasets_with_property_no_snapshot_count=${#datasets_with_property_no_snapshot_table[@]}
   datasets_with_snapshot_no_property_count=${#datasets_with_snapshot_no_property_table[@]}
-  datasets_table_headers=("ID Dataset Properties Snapshots Permissions(LD|D)")
+  datasets_table_headers=("ID Dataset Properties Snapshots Permissions(L|LD|D)")
 
   # Store unique properties and their counts in tables
   if [[ "$datasets_with_property_count" -gt 0 ]]; then
@@ -283,13 +277,16 @@ function get_permissions() {
   # Run the zfs command and filter the output using awk
   zfs_output=$(zfs allow "$dataset")
   permissions=$(echo "$zfs_output" | awk -v path="$dataset" '
-      BEGIN { in_local_descendent_section = 0; in_descendent_section = 0 }
+      BEGIN { in_local_descendent_section = 0; in_descendent_section = 0; in_local_section = 0 }
       /^---- Permissions on / {
           if (in_local_descendent_section) {
               in_local_descendent_section = 0
           }
           if (in_descendent_section) {
               in_descendent_section = 0
+          }
+          if (in_local_section) {
+              in_local_section = 0
           }
           section_path = $4
       }
@@ -301,7 +298,11 @@ function get_permissions() {
           in_descendent_section = 1
           next
       }
-      (in_local_descendent_section || in_descendent_section) && $0 ~ /^[[:space:]]+/ {
+      $0 ~ "Local permissions:" && section_path == path {
+          in_local_section = 1
+          next
+      }
+      (in_local_descendent_section || in_descendent_section || in_local_section) && $0 ~ /^[[:space:]]+/ {
           # Split the line using spaces and print from the third field onwards
           for (i = 3; i <= NF; i++) {
               permission = $i
@@ -312,18 +313,21 @@ function get_permissions() {
                   local_descendent_permissions = local_descendent_permissions permission
               } else if (in_descendent_section) {
                   descendent_permissions = descendent_permissions permission
+              } else if (in_local_section) {
+                  local_permissions = local_permissions permission
               }
           }
       }
-      (in_local_descendent_section || in_descendent_section) && NF == 0 {
+      (in_local_descendent_section || in_descendent_section || in_local_section) && NF == 0 {
           in_local_descendent_section = 0
           in_descendent_section = 0
+          in_local_section = 0
       }
       END {
-          if (descendent_permissions) {
-              local_descendent_permissions = local_descendent_permissions "|"
-          }
-          printf local_descendent_permissions descendent_permissions
+          local_descendent_permissions = (local_descendent_permissions == "") ? "-" : local_descendent_permissions
+          descendent_permissions = (descendent_permissions == "") ? "-" : descendent_permissions
+          local_permissions = (local_permissions == "") ? "-" : local_permissions
+          printf local_permissions "|" local_descendent_permissions "|" descendent_permissions
       }
   ')
 
