@@ -202,7 +202,7 @@ function gather_snapshot_data() {
   datasets_without_property_count=${#datasets_without_property_table[@]}
   datasets_with_property_no_snapshot_count=${#datasets_with_property_no_snapshot_table[@]}
   datasets_with_snapshot_no_property_count=${#datasets_with_snapshot_no_property_table[@]}
-  datasets_table_headers=("ID Dataset Properties Snapshots Permissions(L|D)")
+  datasets_table_headers=("ID Dataset Properties Snapshots Permissions(LD|D)")
 
   # Store unique properties and their counts in tables
   if [[ "$datasets_with_property_count" -gt 0 ]]; then
@@ -283,10 +283,10 @@ function get_permissions() {
   # Run the zfs command and filter the output using awk
   zfs_output=$(zfs allow "$dataset")
   permissions=$(echo "$zfs_output" | awk -v path="$dataset" '
-      BEGIN { in_local_section = 0; in_descendent_section = 0 }
+      BEGIN { in_local_descendent_section = 0; in_descendent_section = 0 }
       /^---- Permissions on / {
-          if (in_local_section) {
-              in_local_section = 0
+          if (in_local_descendent_section) {
+              in_local_descendent_section = 0
           }
           if (in_descendent_section) {
               in_descendent_section = 0
@@ -294,36 +294,36 @@ function get_permissions() {
           section_path = $4
       }
       $0 ~ "Local\\+Descendent permissions:" && section_path == path {
-          in_local_section = 1
+          in_local_descendent_section = 1
           next
       }
       $0 ~ "Descendent permissions:" && section_path == path {
           in_descendent_section = 1
           next
       }
-      (in_local_section || in_descendent_section) && $0 ~ /^[[:space:]]+/ {
+      (in_local_descendent_section || in_descendent_section) && $0 ~ /^[[:space:]]+/ {
           # Split the line using spaces and print from the third field onwards
           for (i = 3; i <= NF; i++) {
               permission = $i
               if (i < NF) {
                   permission = permission ","
               }
-              if (in_local_section) {
-                  local_permissions = local_permissions permission
+              if (in_local_descendent_section) {
+                  local_descendent_permissions = local_descendent_permissions permission
               } else if (in_descendent_section) {
                   descendent_permissions = descendent_permissions permission
               }
           }
       }
-      (in_local_section || in_descendent_section) && NF == 0 {
-          in_local_section = 0
+      (in_local_descendent_section || in_descendent_section) && NF == 0 {
+          in_local_descendent_section = 0
           in_descendent_section = 0
       }
       END {
           if (descendent_permissions) {
-              local_permissions = local_permissions "|"
+              local_descendent_permissions = local_descendent_permissions "|"
           }
-          printf local_permissions descendent_permissions
+          printf local_descendent_permissions descendent_permissions
       }
   ')
 
@@ -1026,6 +1026,12 @@ function set_snapshot_permissions() {
   echo "Setting Snapshot Permissions"
   echo "---------------------------------------------------------------------"
 
+    echo "  Snapshot Permissions on Root -> Allowing on Dataset + Descendents ($permissions_snapshot_and_send)..."
+
+  if [[ "$dry_run" == false ]]; then
+    sudo zfs allow -u $user $permissions_snapshot_and_send $root_dataset
+  fi
+
   for item in "${items[@]}"; do
 
     dataset=$(echo "$item" | awk '{print $2}')
@@ -1070,11 +1076,11 @@ function set_snapshot_permissions() {
 
     if [[ $snapshot_enabled == true ]]; then
 
-      echo "  Snapshotting Enabled -> Allowing on Dataset + Descendents ($permissions_snapshot_and_send)..."
+      #echo "  Snapshotting Enabled -> Allowing on Dataset + Descendents ($permissions_snapshot_and_send)..."
 
-      if [[ "$dry_run" == false ]]; then
-        sudo zfs allow -u $user $permissions_snapshot_and_send $dataset
-      fi
+      #if [[ "$dry_run" == false ]]; then
+      #  sudo zfs allow -u $user $permissions_snapshot_and_send $dataset
+      #fi
 
       if [[ $dataset_is_leaf == true ]]; then
 
@@ -1086,7 +1092,7 @@ function set_snapshot_permissions() {
 
       else
 
-        echo "  Is Not Leaf Dataset -> Unallowing on Dataset (mount,destroy)..."
+        echo "  Is Not Leaf Dataset -> Unallowing on Descendents ($permissions_snapshot_leaf)..."
 
         if [[ "$dry_run" == false ]]; then
           sudo zfs unallow -d -u $user $permissions_snapshot_leaf $dataset
@@ -1096,10 +1102,10 @@ function set_snapshot_permissions() {
 
     else
 
-      echo "  Snapshotting Disabled -> Unallowing on Dataset + Descendents ($permissions_snapshot_and_send + $permissions_snapshot_leaf)..."
+      echo "  Snapshotting Disabled -> Unallowing on Descendents ($permissions_snapshot_leaf)..."
 
       if [[ "$dry_run" == false ]]; then
-        sudo zfs unallow -u $user $permissions_snapshot_and_send $dataset
+        #sudo zfs unallow -u $user $permissions_snapshot_and_send $dataset
         sudo zfs unallow -d -u $user $permissions_snapshot_leaf $dataset
       fi
 
